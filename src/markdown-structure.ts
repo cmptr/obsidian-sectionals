@@ -29,6 +29,11 @@ interface MarkdownNode {
   readonly to: number;
 }
 
+interface SourceRange {
+  readonly from: number;
+  readonly to: number;
+}
+
 /* eslint-disable no-magic-numbers -- Markdown heading node names map to specification-defined levels. */
 const HEADING_LEVEL_BY_NODE: Readonly<Record<string, HeadingLevel>> = {
   ATXHeading1: 1,
@@ -42,6 +47,14 @@ const HEADING_LEVEL_BY_NODE: Readonly<Record<string, HeadingLevel>> = {
 };
 /* eslint-enable no-magic-numbers -- Re-enable the rule outside the specification-defined mapping. */
 
+const DELIMITER_IGNORED_NODE_NAMES = new Set([
+  'CodeBlock',
+  'CommentBlock',
+  'FencedCode',
+  'InlineCode'
+]);
+const PERCENT_COMMENT_DELIMITER = '%%';
+
 export function parseMarkdownStructure(source: string): MarkdownStructure {
   const root: MarkdownContainer = {
     depth: 0,
@@ -52,9 +65,14 @@ export function parseMarkdownStructure(source: string): MarkdownStructure {
   const containers: MarkdownContainer[] = [root];
   const headings: MarkdownHeading[] = [];
   const containerStack: MarkdownContainer[] = [root];
+  const delimiterIgnoredRanges: SourceRange[] = [];
 
   parser.parse(source).iterate({
     enter(node) {
+      if (DELIMITER_IGNORED_NODE_NAMES.has(node.name)) {
+        delimiterIgnoredRanges.push({ from: node.from, to: node.to });
+      }
+
       if (node.name === 'Blockquote') {
         const container = createContainer(source, node, containerStack.length);
         containers.push(container);
@@ -79,7 +97,27 @@ export function parseMarkdownStructure(source: string): MarkdownStructure {
     }
   });
 
-  return { containers, headings };
+  const frontmatterRange = findFrontmatterRange(source);
+  const delimiterIgnoredRangesWithFrontmatter = frontmatterRange === null
+    ? delimiterIgnoredRanges
+    : [...delimiterIgnoredRanges, frontmatterRange];
+  const protectedRanges = [
+    ...delimiterIgnoredRangesWithFrontmatter,
+    ...findPercentCommentRanges(source, delimiterIgnoredRangesWithFrontmatter)
+  ];
+
+  return {
+    containers,
+    headings: headings.filter((heading) =>
+      protectedRanges.every(
+        (range) => !containsOffset(range, heading.syntaxStart)
+      )
+    )
+  };
+}
+
+function containsOffset(range: SourceRange, offset: number): boolean {
+  return range.from <= offset && offset < range.to;
 }
 
 function createContainer(
@@ -93,6 +131,71 @@ function createContainer(
     id: `blockquote:${String(node.from)}:${String(node.to)}`,
     start: getLineStart(source, node.from)
   };
+}
+
+function findFrontmatterRange(source: string): null | SourceRange {
+  const contentStart = source.startsWith('\u{FEFF}') ? 1 : 0;
+  const firstLineEnd = source.indexOf('\n', contentStart);
+  const firstLine = source
+    .slice(contentStart, firstLineEnd === -1 ? source.length : firstLineEnd)
+    .replace(/\r$/, '');
+  if (firstLine !== '---') {
+    return null;
+  }
+
+  let lineStart = firstLineEnd === -1 ? source.length : firstLineEnd + 1;
+  while (lineStart < source.length) {
+    const lineEnd = source.indexOf('\n', lineStart);
+    const line = source
+      .slice(lineStart, lineEnd === -1 ? source.length : lineEnd)
+      .replace(/\r$/, '');
+    if (line === '---' || line === '...') {
+      return {
+        from: 0,
+        to: lineEnd === -1 ? source.length : lineEnd + 1
+      };
+    }
+    lineStart = lineEnd === -1 ? source.length : lineEnd + 1;
+  }
+
+  return { from: 0, to: source.length };
+}
+
+function findPercentCommentRanges(
+  source: string,
+  delimiterIgnoredRanges: readonly SourceRange[]
+): SourceRange[] {
+  const ranges: SourceRange[] = [];
+  let open: null | number = null;
+  let searchFrom = 0;
+
+  while (searchFrom < source.length) {
+    const delimiter = source.indexOf(PERCENT_COMMENT_DELIMITER, searchFrom);
+    if (delimiter === -1) {
+      break;
+    }
+    searchFrom = delimiter + PERCENT_COMMENT_DELIMITER.length;
+    if (
+      delimiterIgnoredRanges.some((range) => containsOffset(range, delimiter))
+    ) {
+      continue;
+    }
+
+    if (open === null) {
+      open = delimiter;
+    } else {
+      ranges.push({
+        from: open,
+        to: delimiter + PERCENT_COMMENT_DELIMITER.length
+      });
+      open = null;
+    }
+  }
+
+  if (open !== null) {
+    ranges.push({ from: open, to: source.length });
+  }
+  return ranges;
 }
 
 function getHeadingLineStart(source: string, node: MarkdownNode): number {

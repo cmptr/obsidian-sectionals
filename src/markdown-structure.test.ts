@@ -112,4 +112,28 @@ describe('parseMarkdownStructure', () => {
     expect(heading).toMatchObject({ level: 1, lineStart: 0 });
     expect(heading?.container.depth).toBe(1);
   });
+
+  it.each([
+    ['frontmatter', '---\n# hidden\n---\n# visible\n'],
+    ['frontmatter with BOM', '\u{FEFF}---\n# hidden\n...\n# visible\n'],
+    ['unclosed frontmatter', '---\n# hidden\n'],
+    ['frontmatter closing delimiter at EOF', '---\n# hidden\n---'],
+    ['HTML comment', '<!--\n# hidden\n-->\n# visible\n'],
+    ['percent delimiters in frontmatter', '---\nvalue: %%\n---\n# visible\n'],
+    ['percent delimiters in HTML comments', '<!-- %% -->\n# visible\n'],
+    ['Obsidian comment', '%%\n# hidden\n%%\n# visible\n'],
+    ['unclosed Obsidian comment', '%%\n# hidden\n']
+  ])('ignores headings in %s', (_name, source) => {
+    const visibleLevels = source.includes('# visible') ? [1] : [];
+    expect(
+      parseMarkdownStructure(source).headings.map(({ level }) => level)
+    ).toEqual(visibleLevels);
+  });
+
+  it('does not treat percent delimiters inside code as Obsidian comments', () => {
+    const source = '```\n%%\n```\n# visible\n';
+    expect(
+      parseMarkdownStructure(source).headings.map(({ level }) => level)
+    ).toEqual([1]);
+  });
 });
