@@ -49,6 +49,7 @@ const HEADING_LEVEL_BY_NODE: Readonly<Record<string, HeadingLevel>> = {
 
 const DELIMITER_IGNORED_NODE_NAMES = new Set([
   'CodeBlock',
+  'Comment',
   'CommentBlock',
   'FencedCode',
   'InlineCode'
