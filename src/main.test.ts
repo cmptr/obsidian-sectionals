@@ -1,18 +1,22 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
-import type { App, Editor, EditorPosition, PluginManifest } from 'obsidian';
+import type { App, Command, Editor, EditorPosition, MarkdownView, PluginManifest } from 'obsidian';
+import type { MockInstance } from 'vitest';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DeletionRange } from './deletion-planner.ts';
 
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible module imports compact.
-import DeleteSectionsPlugin, { executeDeleteCommand, NO_TARGET_NOTICE, PARSE_FAILURE_NOTICE } from './main.ts';
+import DeleteSectionsPlugin, { executeDeleteCommand } from './main.ts';
 
 interface EditorFixture {
   editor: SectionEditor;
   replaceRange: ReturnType<typeof vi.fn>;
   setCursor: ReturnType<typeof vi.fn>;
+}
+
+interface PluginCommandsFixture {
+  addCommand: MockInstance<(command: Command) => Command>;
 }
 
 type SectionEditor = Pick<
@@ -48,6 +52,24 @@ function createEditor(source: string, cursorOffset: number): EditorFixture {
     replaceRange,
     setCursor
   };
+}
+
+function loadPluginCommands(): PluginCommandsFixture {
+  const manifest: PluginManifest = {
+    author: 'Aaron Bell',
+    description: 'Delete the Markdown section containing the cursor.',
+    id: 'sectionals',
+    isDesktopOnly: false,
+    minAppVersion: '1.8.9',
+    name: 'Sectionals',
+    version: '0.1.0'
+  };
+  const plugin = new DeleteSectionsPlugin({} as App, manifest);
+  const addCommand = vi.spyOn(plugin, 'addCommand');
+
+  plugin.onload();
+
+  return { addCommand };
 }
 
 describe('executeDeleteCommand', () => {
@@ -94,7 +116,7 @@ describe('executeDeleteCommand', () => {
 
     executeDeleteCommand(editor, 'section', notify, () => null);
 
-    expect(notify).toHaveBeenCalledWith(NO_TARGET_NOTICE);
+    expect(notify).toHaveBeenCalledWith('No containing heading found.');
     expect(replaceRange).not.toHaveBeenCalled();
     expect(setCursor).not.toHaveBeenCalled();
   });
@@ -107,7 +129,9 @@ describe('executeDeleteCommand', () => {
       throw new Error('parse failed');
     });
 
-    expect(notify).toHaveBeenCalledWith(PARSE_FAILURE_NOTICE);
+    expect(notify).toHaveBeenCalledWith(
+      'Unable to determine the section to delete.'
+    );
     expect(replaceRange).not.toHaveBeenCalled();
   });
 
@@ -129,39 +153,58 @@ describe('executeDeleteCommand', () => {
 });
 
 describe('DeleteSectionsPlugin', () => {
-  it('registers the two public editor commands with exact metadata', () => {
-    const manifest: PluginManifest = {
-      author: 'Aaron Bell',
-      description: 'Delete the Markdown section containing the cursor.',
-      id: 'sectionals',
-      isDesktopOnly: false,
-      minAppVersion: '1.8.9',
-      name: 'Sectionals',
-      version: '0.1.0'
-    };
-    const plugin = new DeleteSectionsPlugin({} as App, manifest);
-    const addCommand = vi.spyOn(plugin, 'addCommand');
-
-    plugin.onload();
+  it('registers exact editor-only command metadata without hotkeys', () => {
+    const { addCommand } = loadPluginCommands();
 
     expect(addCommand).toHaveBeenCalledTimes(2);
     expect(
       addCommand.mock.calls.map(([command]) => ({
-        hasEditorCallback: typeof command.editorCallback === 'function',
+        callback: command.callback,
+        editorCallback: typeof command.editorCallback,
+        hotkeys: command.hotkeys,
         id: command.id,
         name: command.name
       }))
     ).toEqual([
       {
-        hasEditorCallback: true,
+        callback: undefined,
+        editorCallback: 'function',
+        hotkeys: undefined,
         id: 'delete-current-section',
         name: 'Delete current section'
       },
       {
-        hasEditorCallback: true,
+        callback: undefined,
+        editorCallback: 'function',
+        hotkeys: undefined,
         id: 'delete-current-heading-block',
         name: 'Delete current heading block'
       }
     ]);
+  });
+
+  it('routes each registered callback to its matching deletion mode', () => {
+    const { addCommand } = loadPluginCommands();
+    const commands = addCommand.mock.calls.map(([command]) => command);
+    const source = '# A\nintro\n## B\nchild\n# C\nkeep\n';
+    const section = createEditor(source, 2);
+    const headingBlock = createEditor(source, 2);
+    const view = {} as MarkdownView;
+
+    commands[0]?.editorCallback?.(section.editor as Editor, view);
+    commands[1]?.editorCallback?.(headingBlock.editor as Editor, view);
+
+    expect(section.replaceRange).toHaveBeenCalledOnce();
+    expect(section.replaceRange).toHaveBeenCalledWith(
+      '',
+      { ch: 0, line: 0 },
+      { ch: 21, line: 0 }
+    );
+    expect(headingBlock.replaceRange).toHaveBeenCalledOnce();
+    expect(headingBlock.replaceRange).toHaveBeenCalledWith(
+      '',
+      { ch: 0, line: 0 },
+      { ch: 10, line: 0 }
+    );
   });
 });
