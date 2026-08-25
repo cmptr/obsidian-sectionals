@@ -8,6 +8,12 @@ describe('parseMarkdownStructure', () => {
     const source = '# Root\nbody\nTitle\n---\n';
     const structure = parseMarkdownStructure(source);
 
+    expect(structure.containers[0]).toEqual({
+      depth: 0,
+      end: source.length,
+      id: 'root',
+      start: 0
+    });
     expect(
       structure.headings.map(({ level, lineStart, syntaxEnd }) => ({
         level,
@@ -31,17 +37,61 @@ describe('parseMarkdownStructure', () => {
     const source = '# Root\n> ## Quote\n> > ### Nested\n';
     const structure = parseMarkdownStructure(source);
 
+    expect(structure.containers).toEqual([
+      { depth: 0, end: 33, id: 'root', start: 0 },
+      { depth: 1, end: 33, id: 'blockquote:7:32', start: 7 },
+      { depth: 2, end: 33, id: 'blockquote:20:32', start: 18 }
+    ]);
     expect(
       structure.headings.map((heading) => ({
+        containerId: heading.container.id,
         depth: heading.container.depth,
         level: heading.level,
         lineStart: heading.lineStart
       }))
     ).toEqual([
-      { depth: 0, level: 1, lineStart: 0 },
-      { depth: 1, level: 2, lineStart: 7 },
-      { depth: 2, level: 3, lineStart: 18 }
+      { containerId: 'root', depth: 0, level: 1, lineStart: 0 },
+      {
+        containerId: 'blockquote:7:32',
+        depth: 1,
+        level: 2,
+        lineStart: 7
+      },
+      {
+        containerId: 'blockquote:20:32',
+        depth: 2,
+        level: 3,
+        lineStart: 18
+      }
     ]);
+  });
+
+  it('assigns callout headings to the exact line-aligned container', () => {
+    const source = '> [!note] Callout\n> ## Heading\n> body\n';
+    const structure = parseMarkdownStructure(source);
+
+    expect(structure.containers).toEqual([
+      { depth: 0, end: 38, id: 'root', start: 0 },
+      { depth: 1, end: 38, id: 'blockquote:0:37', start: 0 }
+    ]);
+    expect(structure.headings[0]?.container).toEqual({
+      depth: 1,
+      end: 38,
+      id: 'blockquote:0:37',
+      start: 0
+    });
+  });
+
+  it('ends a quoted container at source length without a trailing line break', () => {
+    const source = '> ## Heading';
+    const structure = parseMarkdownStructure(source);
+
+    expect(structure.containers[1]).toEqual({
+      depth: 1,
+      end: source.length,
+      id: 'blockquote:0:12',
+      start: 0
+    });
   });
 
   it.each([

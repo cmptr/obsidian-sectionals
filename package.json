@@ -32,9 +32,11 @@
     "eslint": "10.9.1",
     "eslint-plugin-obsidianmd": "0.4.2",
     "jiti": "2.7.0",
+    "jsdom": "30.0.1",
     "obsidian": "1.13.1",
     "obsidian-dev-utils": "96.0.2",
     "obsidian-integration-testing": "10.3.2",
+    "obsidian-test-mocks": "4.2.0",
     "type-fest": "5.8.0",
     "typescript": "6.0.3",
     "vitest": "4.1.11"
