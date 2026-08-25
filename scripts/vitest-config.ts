@@ -3,5 +3,6 @@ import { defineObsidianPluginVitestConfig } from 'obsidian-dev-utils/script-util
 export const config = defineObsidianPluginVitestConfig({
   editContext(context) {
     context.unitTests.execArgv = [];
+    context.unitTests.include = ['src/**/*.test.ts', 'scripts/**/*.test.ts'];
   }
 });

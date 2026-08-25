@@ -25,6 +25,7 @@
     "@lezer/markdown": "1.7.2"
   },
   "devDependencies": {
+    "@obsidian-typings/obsidian-public-latest": "6.34.0",
     "@tsconfig/strictest": "2.0.8",
     "@types/node": "26.3.0",
     "@vitest/coverage-v8": "4.1.11",

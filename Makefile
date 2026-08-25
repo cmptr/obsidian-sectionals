@@ -1,7 +1,6 @@
 SHELL := /usr/bin/env
 .SHELLFLAGS := bash -eu -o pipefail -c
 .DEFAULT_GOAL := help
-.RECIPEPREFIX := >
 
 -include .env
 export
@@ -21,72 +20,72 @@ ARTIFACTS := main.js manifest.json
  validate-vault link symlink unlink reload release clean
 
 help: ## Show available commands
->@awk 'BEGIN {FS = ":.*?## "; printf "Usage: make <target> [VAULT=/path/to/vault]\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "; printf "Usage: make <target> [VAULT=/path/to/vault]\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 install: ## Install dependencies
->pnpm install
+	pnpm install
 
 dev: validate-vault ## Run the development watcher against the selected vault
->OBSIDIAN_CONFIG_FOLDER="$(VAULT_EXPANDED)/.obsidian" pnpm dev
+	OBSIDIAN_CONFIG_FOLDER="$(VAULT_EXPANDED)/.obsidian" pnpm dev
 
 build: ## Create the production bundle
->pnpm build
+	pnpm build
 
 typecheck: ## Typecheck without emitting files
->pnpm typecheck
+	pnpm typecheck
 
 lint: ## Run ESLint
->pnpm lint
+	pnpm lint
 
 format: ## Rewrite source files with dprint
->pnpm format
+	pnpm format
 
 test: ## Run tests once
->pnpm test
+	pnpm test
 
 test-watch: ## Run tests in watch mode
->pnpm test:watch
+	pnpm test:watch
 
 check: ## Run formatting, lint, typecheck, coverage, and production build
->pnpm check
+	pnpm check
 
 validate-vault:
->test -n "$(strip $(VAULT_EXPANDED))" || { echo "VAULT is empty"; exit 1; }
->test -d "$(VAULT_EXPANDED)/.obsidian" || { echo "Not an Obsidian vault: $(VAULT_EXPANDED)"; exit 1; }
+	test -n "$(strip $(VAULT_EXPANDED))" || { echo "VAULT is empty"; exit 1; }
+	test -d "$(VAULT_EXPANDED)/.obsidian" || { echo "Not an Obsidian vault: $(VAULT_EXPANDED)"; exit 1; }
 
 link: build validate-vault ## Copy built artifacts into the vault plugin directory
->test ! -L "$(PLUGIN_DIR)" || rm -f "$(PLUGIN_DIR)"
->test ! -e "$(PLUGIN_DIR)" || test -d "$(PLUGIN_DIR)" || { echo "Plugin path is not a directory: $(PLUGIN_DIR)"; exit 1; }
->mkdir -p "$(PLUGIN_DIR)"
->rm -f $(addprefix "$(PLUGIN_DIR)/",$(ARTIFACTS)) "$(PLUGIN_DIR)/styles.css"
->cp $(addprefix "$(BUILD_DIR)/",$(ARTIFACTS)) "$(PLUGIN_DIR)/"
->@echo "Installed $(PLUGIN_ID) into $(PLUGIN_DIR)"
+	test ! -L "$(PLUGIN_DIR)" || rm -f "$(PLUGIN_DIR)"
+	test ! -e "$(PLUGIN_DIR)" || test -d "$(PLUGIN_DIR)" || { echo "Plugin path is not a directory: $(PLUGIN_DIR)"; exit 1; }
+	mkdir -p "$(PLUGIN_DIR)"
+	rm -f $(addprefix "$(PLUGIN_DIR)/",$(ARTIFACTS)) "$(PLUGIN_DIR)/styles.css"
+	cp $(addprefix "$(BUILD_DIR)/",$(ARTIFACTS)) "$(PLUGIN_DIR)/"
+	@echo "Installed $(PLUGIN_ID) into $(PLUGIN_DIR)"
 
 symlink: build validate-vault ## Symlink built artifacts into the vault plugin directory
->test ! -L "$(PLUGIN_DIR)" || rm -f "$(PLUGIN_DIR)"
->test ! -e "$(PLUGIN_DIR)" || test -d "$(PLUGIN_DIR)" || { echo "Plugin path is not a directory: $(PLUGIN_DIR)"; exit 1; }
->mkdir -p "$(PLUGIN_DIR)"
->rm -f $(addprefix "$(PLUGIN_DIR)/",$(ARTIFACTS)) "$(PLUGIN_DIR)/styles.css"
->ln -s "$(CURDIR)/$(BUILD_DIR)/main.js" "$(PLUGIN_DIR)/main.js"
->ln -s "$(CURDIR)/$(BUILD_DIR)/manifest.json" "$(PLUGIN_DIR)/manifest.json"
->@echo "Symlinked $(PLUGIN_ID) artifacts into $(PLUGIN_DIR)"
+	test ! -L "$(PLUGIN_DIR)" || rm -f "$(PLUGIN_DIR)"
+	test ! -e "$(PLUGIN_DIR)" || test -d "$(PLUGIN_DIR)" || { echo "Plugin path is not a directory: $(PLUGIN_DIR)"; exit 1; }
+	mkdir -p "$(PLUGIN_DIR)"
+	rm -f $(addprefix "$(PLUGIN_DIR)/",$(ARTIFACTS)) "$(PLUGIN_DIR)/styles.css"
+	ln -s "$(CURDIR)/$(BUILD_DIR)/main.js" "$(PLUGIN_DIR)/main.js"
+	ln -s "$(CURDIR)/$(BUILD_DIR)/manifest.json" "$(PLUGIN_DIR)/manifest.json"
+	@echo "Symlinked $(PLUGIN_ID) artifacts into $(PLUGIN_DIR)"
 
 unlink: validate-vault ## Remove this plugin from the vault
->rm -rf "$(PLUGIN_DIR)"
->@echo "Removed $(PLUGIN_DIR)"
+	rm -rf "$(PLUGIN_DIR)"
+	@echo "Removed $(PLUGIN_DIR)"
 
 reload: symlink ## Refresh links and trigger the Hot Reload plugin
->touch "$(PLUGIN_DIR)/.hotreload"
->@echo "Reload triggered (requires the Hot Reload community plugin)"
+	touch "$(PLUGIN_DIR)/.hotreload"
+	@echo "Reload triggered (requires the Hot Reload community plugin)"
 
 release: check ## Build and package an Obsidian release zip
->command -v python3 >/dev/null || { echo "python3 is required to package releases"; exit 1; }
->rm -rf "$(RELEASE_DIR)"
->mkdir -p "$(RELEASE_DIR)"
->cp $(addprefix "$(BUILD_DIR)/",$(ARTIFACTS)) "$(RELEASE_DIR)/"
->cd "$(RELEASE_DIR)" && python3 -c "import zipfile; files=['main.js','manifest.json']; archive=zipfile.ZipFile('$(ZIP_NAME)', 'w', zipfile.ZIP_DEFLATED); [archive.write(file) for file in files]; archive.close()"
->@echo "Release artifact: $(RELEASE_DIR)/$(ZIP_NAME)"
+	command -v python3 >/dev/null || { echo "python3 is required to package releases"; exit 1; }
+	rm -rf "$(RELEASE_DIR)"
+	mkdir -p "$(RELEASE_DIR)"
+	cp $(addprefix "$(BUILD_DIR)/",$(ARTIFACTS)) "$(RELEASE_DIR)/"
+	cd "$(RELEASE_DIR)" && python3 -c "import zipfile; files=['main.js','manifest.json']; archive=zipfile.ZipFile('$(ZIP_NAME)', 'w', zipfile.ZIP_DEFLATED); [archive.write(file) for file in files]; archive.close()"
+	@echo "Release artifact: $(RELEASE_DIR)/$(ZIP_NAME)"
 
 clean: ## Remove generated build and release artifacts
->rm -rf dist coverage
->@echo "Cleaned generated artifacts"
+	rm -rf dist coverage
+	@echo "Cleaned generated artifacts"
