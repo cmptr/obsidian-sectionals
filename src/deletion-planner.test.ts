@@ -40,11 +40,66 @@ describe('planSectionDeletion', () => {
   });
 
   it('targets a Setext heading from its underline', () => {
-    const source = 'Title\n===\nbody\nNext\n===\nkeep\n';
+    const source = 'Title\n===\nbody\n# Next\nkeep\n';
     expect(rangeText(source, source.indexOf('==='), 'section')).toBe(
       'Title\n===\nbody\n'
     );
   });
+
+  it.each([
+    {
+      after: '# Next\nkeep\n',
+      before: '# Before\nkeep\n\n',
+      cursorLines: ['First title', 'second title', '==='],
+      headingText: 'First title\nsecond title\n===\nbody\n',
+      name: 'root LF'
+    },
+    {
+      after: '> # Next\n> keep\n',
+      before: '> # Before\n> keep\n>\n',
+      cursorLines: ['> First title', '> second title', '> ==='],
+      headingText: '> First title\n> second title\n> ===\n> body\n',
+      name: 'quoted LF'
+    },
+    {
+      after: '# Next\r\nkeep\r\n',
+      before: '# Before\r\nkeep\r\n\r\n',
+      cursorLines: ['First title', 'second title', '==='],
+      headingText: 'First title\r\nsecond title\r\n===\r\nbody\r\n',
+      name: 'root CRLF'
+    },
+    {
+      after: '> # Next\r\n> keep\r\n',
+      before: '> # Before\r\n> keep\r\n>\r\n',
+      cursorLines: ['> First title', '> second title', '> ==='],
+      headingText: '> First title\r\n> second title\r\n> ===\r\n> body\r\n',
+      name: 'quoted CRLF'
+    }
+  ])(
+    'targets every line of a multiline Setext heading in $name',
+    ({ after, before, cursorLines, headingText }) => {
+      const source = before + headingText + after;
+      const expectedRange = {
+        from: before.length,
+        to: before.length + headingText.length
+      };
+
+      for (const cursorLine of cursorLines) {
+        const cursor = source.indexOf(cursorLine, before.length);
+        const range = planSectionDeletion(source, cursor, 'section');
+
+        expect(range).toEqual(expectedRange);
+        if (range === null) {
+          continue;
+        }
+        expect(source.slice(0, range.from)).toBe(before);
+        expect(source.slice(range.to)).toBe(after);
+        expect(source.slice(0, range.from) + source.slice(range.to)).toBe(
+          before + after
+        );
+      }
+    }
+  );
 
   it.each([
     ['the heading line', 2],
@@ -80,6 +135,27 @@ describe('planSectionDeletion', () => {
     expect(rangeText(source, source.indexOf('body'), 'section')).toBe(
       '> ## Delete\n> body\n'
     );
+  });
+
+  it('preserves a same-depth sibling blockquote byte-for-byte', () => {
+    const deleted = '> ## Delete\n> body\n';
+    const separator = '\n';
+    const sibling = '> ## Keep\n>   unchanged  \n> `literal`\n';
+    const source = deleted + separator + sibling;
+    const range = planSectionDeletion(
+      source,
+      source.indexOf('body'),
+      'section'
+    );
+
+    expect(range).toEqual({ from: 0, to: deleted.length });
+    if (range === null) {
+      return;
+    }
+    const updated = source.slice(0, range.from) + source.slice(range.to);
+    const updatedSiblingStart = updated.indexOf('> ## Keep');
+    expect(source.slice(source.indexOf('> ## Keep'))).toBe(sibling);
+    expect(updated.slice(updatedSiblingStart)).toBe(sibling);
   });
 
   it('ignores heading-like code while retaining it in the surrounding section', () => {

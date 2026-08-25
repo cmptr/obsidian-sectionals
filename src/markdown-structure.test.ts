@@ -5,7 +5,7 @@ import { parseMarkdownStructure } from './markdown-structure.ts';
 
 describe('parseMarkdownStructure', () => {
   it('returns ATX and Setext headings in source order', () => {
-    const source = '# Root\nbody\nTitle\n---\n';
+    const source = '# Root\nbody\n\nTitle\n---\n';
     const structure = parseMarkdownStructure(source);
 
     expect(structure.containers[0]).toEqual({
@@ -22,7 +22,7 @@ describe('parseMarkdownStructure', () => {
       }))
     ).toEqual([
       { level: 1, lineStart: 0, syntaxEnd: 6 },
-      { level: 2, lineStart: 12, syntaxEnd: 21 }
+      { level: 2, lineStart: 13, syntaxEnd: 22 }
     ]);
   });
 
@@ -112,6 +112,35 @@ describe('parseMarkdownStructure', () => {
     expect(heading).toMatchObject({ level: 1, lineStart: 0 });
     expect(heading?.container.depth).toBe(1);
   });
+
+  it.each([
+    ['root LF', 'previous\n\nFirst title\nsecond title\n===\n', 'First title'],
+    [
+      'quoted LF',
+      '> previous\n>\n> First title\n> second title\n> ===\n',
+      '> First title'
+    ],
+    [
+      'root CRLF',
+      'previous\r\n\r\nFirst title\r\nsecond title\r\n===\r\n',
+      'First title'
+    ],
+    [
+      'quoted CRLF',
+      '> previous\r\n>\r\n> First title\r\n> second title\r\n> ===\r\n',
+      '> First title'
+    ]
+  ])(
+    'uses the first physical title line for a multiline Setext heading with %s',
+    (_name, source, firstPhysicalLine) => {
+      const [heading] = parseMarkdownStructure(source).headings;
+
+      expect(heading).toMatchObject({
+        lineStart: source.indexOf(firstPhysicalLine),
+        syntaxStart: source.indexOf('First title')
+      });
+    }
+  );
 
   it.each([
     ['frontmatter', '---\n# hidden\n---\n# visible\n'],

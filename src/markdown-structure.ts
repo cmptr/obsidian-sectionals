@@ -200,11 +200,6 @@ function findPercentCommentRanges(
 }
 
 function getHeadingLineStart(source: string, node: MarkdownNode): number {
-  if (node.name.startsWith('SetextHeading')) {
-    const underlineStart = getLineStart(source, node.to);
-    return getLineStart(source, Math.max(0, underlineStart - 1));
-  }
-
   return getLineStart(source, node.from);
 }
 

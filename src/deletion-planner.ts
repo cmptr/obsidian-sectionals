@@ -1,4 +1,5 @@
-import type { MarkdownHeading } from './markdown-structure.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible type imports compact.
+import type { HeadingLevel, MarkdownHeading } from './markdown-structure.ts';
 
 import { parseMarkdownStructure } from './markdown-structure.ts';
 
@@ -45,6 +46,38 @@ export function planSectionDeletion(
   return range;
 }
 
+function computeLogicalEnds(
+  headings: readonly MarkdownHeading[]
+): ReadonlyMap<MarkdownHeading, number> {
+  const logicalEnds = new Map<MarkdownHeading, number>();
+  const nextStartsByContainer = new Map<string, Map<HeadingLevel, number>>();
+
+  for (let index = headings.length - 1; index >= 0; index -= 1) {
+    const heading = headings[index];
+    if (heading === undefined) {
+      continue;
+    }
+
+    let nextStartsByLevel = nextStartsByContainer.get(heading.container.id);
+    if (nextStartsByLevel === undefined) {
+      nextStartsByLevel = new Map<HeadingLevel, number>();
+      nextStartsByContainer.set(heading.container.id, nextStartsByLevel);
+    }
+
+    let logicalEnd = heading.container.end;
+    for (const [level, nextLineStart] of nextStartsByLevel) {
+      if (level <= heading.level && nextLineStart < logicalEnd) {
+        logicalEnd = nextLineStart;
+      }
+    }
+
+    logicalEnds.set(heading, logicalEnd);
+    nextStartsByLevel.set(heading.level, heading.lineStart);
+  }
+
+  return logicalEnds;
+}
+
 function containsCursor(
   sourceLength: number,
   start: number,
@@ -77,29 +110,24 @@ function findTarget(
   headings: readonly MarkdownHeading[],
   cursor: number
 ): MarkdownHeading | null {
-  const candidates = headings.filter((heading) =>
-    containsCursor(
-      sourceLength,
-      heading.lineStart,
-      getLogicalEnd(headings, heading),
-      cursor
-    )
-  );
+  const logicalEnds = computeLogicalEnds(headings);
+  let target: MarkdownHeading | null = null;
 
-  candidates.sort(
-    (left, right) =>
-      right.container.depth - left.container.depth
-      || right.lineStart - left.lineStart
-  );
-  return candidates[0] ?? null;
-}
+  for (const heading of headings) {
+    const logicalEnd = logicalEnds.get(heading) ?? heading.container.end;
+    if (!containsCursor(sourceLength, heading.lineStart, logicalEnd, cursor)) {
+      continue;
+    }
 
-function getLogicalEnd(
-  headings: readonly MarkdownHeading[],
-  heading: MarkdownHeading
-): number {
-  return (
-    findBoundary(headings, heading, 'section')?.lineStart
-      ?? heading.container.end
-  );
+    if (
+      target === null
+      || heading.container.depth > target.container.depth
+      || (heading.container.depth === target.container.depth
+        && heading.lineStart > target.lineStart)
+    ) {
+      target = heading;
+    }
+  }
+
+  return target;
 }
