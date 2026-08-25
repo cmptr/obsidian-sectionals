@@ -1,0 +1,8 @@
+.direnv/
+.env
+coverage/
+dist/
+main.js
+node_modules/
+*.tsbuildinfo
+*.zip

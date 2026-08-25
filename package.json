@@ -1,0 +1,42 @@
+{
+  "name": "sectionals",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Delete the Markdown section containing the cursor.",
+  "author": "Aaron Bell",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/build/main.js",
+  "packageManager": "pnpm@10.20.0",
+  "scripts": {
+    "build": "jiti scripts/build.ts",
+    "build:compile": "pnpm typecheck",
+    "dev": "jiti scripts/dev.ts",
+    "format": "jiti scripts/format.ts",
+    "format:check": "jiti scripts/format-check.ts",
+    "lint": "jiti scripts/lint.ts",
+    "test": "jiti scripts/test.ts",
+    "test:coverage": "jiti scripts/test-coverage.ts",
+    "test:watch": "jiti scripts/test-watch.ts",
+    "typecheck": "jiti scripts/typecheck.ts",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build"
+  },
+  "dependencies": {
+    "@lezer/markdown": "1.7.2"
+  },
+  "devDependencies": {
+    "@tsconfig/strictest": "2.0.8",
+    "@types/node": "26.3.0",
+    "@vitest/coverage-v8": "4.1.11",
+    "dprint": "0.56.1",
+    "eslint": "10.9.1",
+    "eslint-plugin-obsidianmd": "0.4.2",
+    "jiti": "2.7.0",
+    "obsidian": "1.13.1",
+    "obsidian-dev-utils": "96.0.2",
+    "obsidian-integration-testing": "10.3.2",
+    "type-fest": "5.8.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}
