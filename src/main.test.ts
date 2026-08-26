@@ -156,11 +156,12 @@ describe('DeleteSectionsPlugin', () => {
   it('registers exact editor-only command metadata without hotkeys', () => {
     const { addCommand } = loadPluginCommands();
 
-    expect(addCommand).toHaveBeenCalledTimes(2);
+    expect(addCommand).toHaveBeenCalledTimes(5);
     expect(
       addCommand.mock.calls.map(([command]) => ({
         callback: command.callback,
         editorCallback: typeof command.editorCallback,
+        editorCheckCallback: typeof command.editorCheckCallback,
         hotkeys: command.hotkeys,
         id: command.id,
         name: command.name
@@ -169,6 +170,7 @@ describe('DeleteSectionsPlugin', () => {
       {
         callback: undefined,
         editorCallback: 'function',
+        editorCheckCallback: 'undefined',
         hotkeys: undefined,
         id: 'delete-current-section',
         name: 'Delete current section'
@@ -176,14 +178,113 @@ describe('DeleteSectionsPlugin', () => {
       {
         callback: undefined,
         editorCallback: 'function',
+        editorCheckCallback: 'undefined',
         hotkeys: undefined,
         id: 'delete-current-heading-block',
         name: 'Delete current heading block'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'delete-current-fenced-code-block',
+        name: 'Delete current fenced code block'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'delete-current-callout',
+        name: 'Delete current callout'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'delete-current-blockquote',
+        name: 'Delete current blockquote'
       }
     ]);
   });
 
-  it('routes each registered callback to its matching deletion mode', () => {
+  it('presents contextual commands only for matching cursor targets', () => {
+    const { addCommand } = loadPluginCommands();
+    const commands = new Map(
+      addCommand.mock.calls.map(([command]) => [command.id, command])
+    );
+    const view = {} as MarkdownView;
+    const fencedSource = '# Heading\nbefore\n```ts\ncode\n```\nafter\n';
+    const fenced = createEditor(fencedSource, fencedSource.indexOf('code'));
+    const calloutSource = '> [!note]\n> body\n';
+    const callout = createEditor(calloutSource, calloutSource.indexOf('body'));
+    const blockquoteSource = '> quote\n> body\n';
+    const blockquote = createEditor(
+      blockquoteSource,
+      blockquoteSource.indexOf('body')
+    );
+    const protectedSource = '> quote\n> %%\n> hidden\n> %%\n> tail\n';
+    const protectedBlockquote = createEditor(
+      protectedSource,
+      protectedSource.indexOf('hidden')
+    );
+
+    const fencedCommand = commands.get('delete-current-fenced-code-block');
+    const calloutCommand = commands.get('delete-current-callout');
+    const blockquoteCommand = commands.get('delete-current-blockquote');
+
+    expect(
+      fencedCommand?.editorCheckCallback?.(true, fenced.editor as Editor, view)
+    ).toBe(true);
+    expect(
+      calloutCommand?.editorCheckCallback?.(
+        true,
+        fenced.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(
+      calloutCommand?.editorCheckCallback?.(
+        true,
+        callout.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      blockquoteCommand?.editorCheckCallback?.(
+        true,
+        callout.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(
+      blockquoteCommand?.editorCheckCallback?.(
+        true,
+        blockquote.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      blockquoteCommand?.editorCheckCallback?.(
+        true,
+        protectedBlockquote.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(fenced.replaceRange).not.toHaveBeenCalled();
+
+    fencedCommand?.editorCheckCallback?.(false, fenced.editor as Editor, view);
+
+    expect(fenced.replaceRange).toHaveBeenCalledWith(
+      '',
+      { ch: fencedSource.indexOf('```ts'), line: 0 },
+      { ch: fencedSource.indexOf('after'), line: 0 }
+    );
+  });
+
+  it('routes each registered heading callback to its matching deletion mode', () => {
     const { addCommand } = loadPluginCommands();
     const commands = addCommand.mock.calls.map(([command]) => command);
     const source = '# A\nintro\n## B\nchild\n# C\nkeep\n';

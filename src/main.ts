@@ -5,11 +5,19 @@ import { Notice, Plugin } from 'obsidian';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionMode, DeletionRange } from './deletion-planner.ts';
+import type { MarkdownBlockKind } from './markdown-structure.ts';
 
-import { planSectionDeletion } from './deletion-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import { planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
 
 export const NO_TARGET_NOTICE = 'No containing heading found.';
 export const PARSE_FAILURE_NOTICE = 'Unable to determine the section to delete.';
+
+interface ContextualDeleteCommand {
+  readonly id: string;
+  readonly kind: MarkdownBlockKind;
+  readonly name: string;
+}
 
 interface DeleteCommand {
   readonly id: string;
@@ -17,10 +25,10 @@ interface DeleteCommand {
   readonly name: string;
 }
 type Notify = (message: string) => void;
-type Planner = (
+type Planner<Mode extends string> = (
   source: string,
   cursorOffset: number,
-  mode: DeletionMode
+  mode: Mode
 ) => DeletionRange | null;
 type SectionEditor = Pick<
   Editor,
@@ -45,6 +53,24 @@ const COMMANDS: readonly DeleteCommand[] = [
   }
 ];
 
+const CONTEXTUAL_COMMANDS: readonly ContextualDeleteCommand[] = [
+  {
+    id: 'delete-current-fenced-code-block',
+    kind: 'fenced-code',
+    name: 'Delete current fenced code block'
+  },
+  {
+    id: 'delete-current-callout',
+    kind: 'callout',
+    name: 'Delete current callout'
+  },
+  {
+    id: 'delete-current-blockquote',
+    kind: 'blockquote',
+    name: 'Delete current blockquote'
+  }
+];
+
 export default class DeleteSectionsPlugin extends Plugin {
   public override onload(): void {
     for (const command of COMMANDS) {
@@ -58,6 +84,19 @@ export default class DeleteSectionsPlugin extends Plugin {
         name: command.name
       });
     }
+
+    for (const command of CONTEXTUAL_COMMANDS) {
+      this.addCommand({
+        editorCheckCallback: (isChecking, editor) =>
+          checkAndExecuteContextualDeleteCommand(
+            isChecking,
+            editor,
+            command.kind
+          ),
+        id: command.id,
+        name: command.name
+      });
+    }
   }
 }
 
@@ -65,13 +104,11 @@ export function executeDeleteCommand(
   editor: SectionEditor,
   mode: DeletionMode,
   notify: Notify,
-  planner: Planner = planSectionDeletion
+  planner: Planner<DeletionMode> = planSectionDeletion
 ): void {
-  const source = editor.getValue();
-  const cursorOffset = editor.posToOffset(editor.getCursor('head'));
   let range: DeletionRange | null;
   try {
-    range = planner(source, cursorOffset, mode);
+    range = resolveDeletionRange(editor, mode, planner);
   } catch {
     notify(PARSE_FAILURE_NOTICE);
     return;
@@ -82,8 +119,42 @@ export function executeDeleteCommand(
     return;
   }
 
+  applyDeletionRange(editor, range);
+}
+
+function applyDeletionRange(editor: SectionEditor, range: DeletionRange): void {
   const from = editor.offsetToPos(range.from);
   const to = editor.offsetToPos(range.to);
   editor.replaceRange('', from, to);
   editor.setCursor(from);
+}
+
+function checkAndExecuteContextualDeleteCommand(
+  isChecking: boolean,
+  editor: SectionEditor,
+  kind: MarkdownBlockKind
+): boolean {
+  let range: DeletionRange | null;
+  try {
+    range = resolveDeletionRange(editor, kind, planContextualDeletion);
+  } catch {
+    return false;
+  }
+  if (range === null) {
+    return false;
+  }
+  if (!isChecking) {
+    applyDeletionRange(editor, range);
+  }
+  return true;
+}
+
+function resolveDeletionRange<Mode extends string>(
+  editor: SectionEditor,
+  mode: Mode,
+  planner: Planner<Mode>
+): DeletionRange | null {
+  const source = editor.getValue();
+  const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+  return planner(source, cursorOffset, mode);
 }

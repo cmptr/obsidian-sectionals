@@ -1,7 +1,17 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 
-import { planSectionDeletion } from './deletion-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import { planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
+
+function contextualRangeText(
+  source: string,
+  cursor: number,
+  mode: 'blockquote' | 'callout' | 'fenced-code'
+): null | string {
+  const range = planContextualDeletion(source, cursor, mode);
+  return range === null ? null : source.slice(range.from, range.to);
+}
 
 function rangeText(
   source: string,
@@ -192,6 +202,112 @@ describe('planSectionDeletion', () => {
     'rejects cursor offset %i outside a three-character source',
     (cursor) => {
       expect(planSectionDeletion('# H', cursor, 'section')).toBeNull();
+    }
+  );
+});
+
+describe('planContextualDeletion', () => {
+  it.each([
+    ['backtick', '```ts\nconst value = 1;\n```\n'],
+    ['tilde', '~~~ts\nconst value = 1;\n~~~\n']
+  ])('deletes only the current %s fenced code block', (_name, fencedBlock) => {
+    const source = `# Heading\nbefore\n${fencedBlock}after\n# Next\n`;
+    const cursor = source.indexOf('const value');
+
+    expect(contextualRangeText(source, cursor, 'fenced-code')).toBe(
+      fencedBlock
+    );
+    expect(rangeText(source, cursor, 'section')).toBe(
+      `# Heading\nbefore\n${fencedBlock}after\n`
+    );
+  });
+
+  it('deletes a quoted fenced block without deleting its callout', () => {
+    const source = '> [!note]\n> before\n> ```ts\n> const value = 1;\n> ```\n> after\n';
+
+    expect(
+      contextualRangeText(source, source.indexOf('const value'), 'fenced-code')
+    ).toBe('> ```ts\n> const value = 1;\n> ```\n');
+  });
+
+  it('deletes the current callout as a complete line-aligned block', () => {
+    const callout = '> [!warning]- Caution\n> body\n';
+    const source = `before\n${callout}\nafter\n`;
+
+    expect(contextualRangeText(source, source.indexOf('body'), 'callout')).toBe(
+      callout
+    );
+  });
+
+  it('deletes the current plain blockquote', () => {
+    const blockquote = '> quote\n> body\n';
+    const source = `before\n${blockquote}\nafter\n`;
+
+    expect(
+      contextualRangeText(source, source.indexOf('body'), 'blockquote')
+    ).toBe(blockquote);
+  });
+
+  it('does not treat a callout as a plain blockquote', () => {
+    const source = '> [!note]\n> body\n';
+
+    expect(
+      planContextualDeletion(source, source.indexOf('body'), 'blockquote')
+    ).toBeNull();
+  });
+
+  it('offers distinct nested blockquote and callout ranges', () => {
+    const nested = '> > nested\n> > body\n';
+    const source = `> [!note]\n> outer\n${nested}>\n> tail\n`;
+    const cursor = source.indexOf('body');
+
+    expect(contextualRangeText(source, cursor, 'blockquote')).toBe(nested);
+    expect(contextualRangeText(source, cursor, 'callout')).toBe(source);
+  });
+
+  it('returns null outside a requested block kind', () => {
+    const source = '# Heading\nbody\n';
+
+    expect(
+      planContextualDeletion(source, source.indexOf('body'), 'fenced-code')
+    ).toBeNull();
+  });
+
+  it.each([
+    ['Obsidian comment', '> quote\n> %%\n> hidden\n> %%\n> tail\n'],
+    ['HTML comment', '> quote\n> <!--\n> hidden\n> -->\n> tail\n']
+  ])(
+    'does not target an enclosing blockquote from inside an %s',
+    (_name, source) => {
+      expect(
+        planContextualDeletion(source, source.indexOf('hidden'), 'blockquote')
+      ).toBeNull();
+      expect(
+        contextualRangeText(source, source.indexOf('tail'), 'blockquote')
+      ).toBe(source);
+    }
+  );
+
+  it('does not target the empty EOF line after a final block', () => {
+    const source = '```\ncode\n```\n';
+
+    expect(
+      planContextualDeletion(source, source.length, 'fenced-code')
+    ).toBeNull();
+  });
+
+  it('targets true EOF inside a final block without a trailing line break', () => {
+    const source = '```\ncode\n```';
+
+    expect(contextualRangeText(source, source.length, 'fenced-code')).toBe(
+      source
+    );
+  });
+
+  it.each([-1, 4])(
+    'rejects cursor offset %i outside a three-character source',
+    (cursor) => {
+      expect(planContextualDeletion('```', cursor, 'fenced-code')).toBeNull();
     }
   );
 });

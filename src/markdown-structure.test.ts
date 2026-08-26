@@ -70,6 +70,9 @@ describe('parseMarkdownStructure', () => {
     const source = '> [!note] Callout\n> ## Heading\n> body\n';
     const structure = parseMarkdownStructure(source);
 
+    expect(structure.blocks).toEqual([
+      { depth: 1, end: 38, kind: 'callout', start: 0 }
+    ]);
     expect(structure.containers).toEqual([
       { depth: 0, end: 38, id: 'root', start: 0 },
       { depth: 1, end: 38, id: 'blockquote:0:37', start: 0 }
@@ -79,6 +82,48 @@ describe('parseMarkdownStructure', () => {
       end: 38,
       id: 'blockquote:0:37',
       start: 0
+    });
+  });
+
+  it('distinguishes plain blockquotes from callouts', () => {
+    const source = '> quote\n\n> [!warning]- Collapsed\n> body\n';
+    const calloutStart = source.indexOf('> [!warning]');
+
+    expect(parseMarkdownStructure(source).blocks).toEqual([
+      {
+        depth: 1,
+        end: source.indexOf('\n\n') + 1,
+        kind: 'blockquote',
+        start: 0
+      },
+      {
+        depth: 1,
+        end: source.length,
+        kind: 'callout',
+        start: calloutStart
+      }
+    ]);
+  });
+
+  it.each([
+    ['spaces', 'not a callout'],
+    ['punctuation', 'note?']
+  ])('treats callout-like identifiers with %s as blockquotes', (_name, id) => {
+    const source = `> [!${id}]\n> body\n`;
+
+    expect(parseMarkdownStructure(source).blocks[0]?.kind).toBe('blockquote');
+  });
+
+  it('returns line-aligned fenced code block ranges', () => {
+    const source = 'before\n```ts\nconst value = 1;\n```\nafter\n';
+    const blockStart = source.indexOf('```ts');
+    const blockEnd = source.indexOf('after');
+
+    expect(parseMarkdownStructure(source).blocks).toContainEqual({
+      depth: 0,
+      end: blockEnd,
+      kind: 'fenced-code',
+      start: blockStart
     });
   });
 
@@ -160,6 +205,14 @@ describe('parseMarkdownStructure', () => {
     expect(
       parseMarkdownStructure(source).headings.map(({ level }) => level)
     ).toEqual(visibleLevels);
+  });
+
+  it.each([
+    ['frontmatter', '---\n```\nhidden\n```\n> quote\n---\n'],
+    ['HTML comment', '<!--\n```\nhidden\n```\n> quote\n-->\n'],
+    ['Obsidian comment', '%%\n```\nhidden\n```\n> quote\n%%\n']
+  ])('does not expose structural blocks inside %s', (_name, source) => {
+    expect(parseMarkdownStructure(source).blocks).toEqual([]);
   });
 
   it.each([

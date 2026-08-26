@@ -1,5 +1,5 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible type imports compact.
-import type { HeadingLevel, MarkdownHeading } from './markdown-structure.ts';
+import type { HeadingLevel, MarkdownBlock, MarkdownBlockKind, MarkdownHeading } from './markdown-structure.ts';
 
 import { parseMarkdownStructure } from './markdown-structure.ts';
 
@@ -8,6 +8,50 @@ export type DeletionMode = 'heading-block' | 'section';
 export interface DeletionRange {
   readonly from: number;
   readonly to: number;
+}
+
+export function planContextualDeletion(
+  source: string,
+  cursorOffset: number,
+  kind: MarkdownBlockKind
+): DeletionRange | null {
+  if (
+    !Number.isSafeInteger(cursorOffset)
+    || cursorOffset < 0
+    || cursorOffset > source.length
+  ) {
+    return null;
+  }
+  if (cursorOffset === source.length && source.endsWith('\n')) {
+    return null;
+  }
+
+  const structure = parseMarkdownStructure(source);
+  if (
+    structure.protectedRanges.some((range) => containsCursor(source.length, range.from, range.to, cursorOffset))
+  ) {
+    return null;
+  }
+
+  let target: MarkdownBlock | null = null;
+  for (const block of structure.blocks) {
+    if (
+      block.kind !== kind
+      || !containsCursor(source.length, block.start, block.end, cursorOffset)
+    ) {
+      continue;
+    }
+    if (
+      target === null
+      || block.depth > target.depth
+      || (block.depth === target.depth
+        && block.end - block.start < target.end - target.start)
+    ) {
+      target = block;
+    }
+  }
+
+  return target === null ? null : { from: target.start, to: target.end };
 }
 
 export function planSectionDeletion(

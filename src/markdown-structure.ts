@@ -3,6 +3,15 @@ import { parser } from '@lezer/markdown';
 // eslint-disable-next-line no-magic-numbers -- Markdown defines exactly six numeric heading levels.
 export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
+export interface MarkdownBlock {
+  readonly depth: number;
+  readonly end: number;
+  readonly kind: MarkdownBlockKind;
+  readonly start: number;
+}
+
+export type MarkdownBlockKind = 'blockquote' | 'callout' | 'fenced-code';
+
 export interface MarkdownContainer {
   readonly depth: number;
   readonly end: number;
@@ -18,19 +27,21 @@ export interface MarkdownHeading {
   readonly syntaxStart: number;
 }
 
+export interface MarkdownRange {
+  readonly from: number;
+  readonly to: number;
+}
+
 export interface MarkdownStructure {
+  readonly blocks: readonly MarkdownBlock[];
   readonly containers: readonly MarkdownContainer[];
   readonly headings: readonly MarkdownHeading[];
+  readonly protectedRanges: readonly MarkdownRange[];
 }
 
 interface MarkdownNode {
   readonly from: number;
   readonly name: string;
-  readonly to: number;
-}
-
-interface SourceRange {
-  readonly from: number;
   readonly to: number;
 }
 
@@ -47,6 +58,7 @@ const HEADING_LEVEL_BY_NODE: Readonly<Record<string, HeadingLevel>> = {
 };
 /* eslint-enable no-magic-numbers -- Re-enable the rule outside the specification-defined mapping. */
 
+const BLOCK_IGNORED_NODE_NAMES = new Set(['Comment', 'CommentBlock']);
 const DELIMITER_IGNORED_NODE_NAMES = new Set([
   'CodeBlock',
   'Comment',
@@ -63,21 +75,40 @@ export function parseMarkdownStructure(source: string): MarkdownStructure {
     id: 'root',
     start: 0
   };
+  const blocks: MarkdownBlock[] = [];
   const containers: MarkdownContainer[] = [root];
   const headings: MarkdownHeading[] = [];
   const containerStack: MarkdownContainer[] = [root];
-  const delimiterIgnoredRanges: SourceRange[] = [];
+  const blockIgnoredRanges: MarkdownRange[] = [];
+  const delimiterIgnoredRanges: MarkdownRange[] = [];
 
   parser.parse(source).iterate({
     enter(node) {
       if (DELIMITER_IGNORED_NODE_NAMES.has(node.name)) {
-        delimiterIgnoredRanges.push({ from: node.from, to: node.to });
+        const range = { from: node.from, to: node.to };
+        delimiterIgnoredRanges.push(range);
+        if (BLOCK_IGNORED_NODE_NAMES.has(node.name)) {
+          blockIgnoredRanges.push(range);
+        }
       }
 
       if (node.name === 'Blockquote') {
         const container = createContainer(source, node, containerStack.length);
+        blocks.push({
+          depth: container.depth,
+          end: container.end,
+          kind: isCallout(source, node) ? 'callout' : 'blockquote',
+          start: container.start
+        });
         containers.push(container);
         containerStack.push(container);
+      } else if (node.name === 'FencedCode') {
+        blocks.push({
+          depth: containerStack.length - 1,
+          end: getLineEndIncludingBreak(source, node.to),
+          kind: 'fenced-code',
+          start: getLineStart(source, node.from)
+        });
       }
 
       const level = HEADING_LEVEL_BY_NODE[node.name];
@@ -99,25 +130,42 @@ export function parseMarkdownStructure(source: string): MarkdownStructure {
   });
 
   const frontmatterRange = findFrontmatterRange(source);
+  const blockIgnoredRangesWithFrontmatter = frontmatterRange === null
+    ? blockIgnoredRanges
+    : [...blockIgnoredRanges, frontmatterRange];
   const delimiterIgnoredRangesWithFrontmatter = frontmatterRange === null
     ? delimiterIgnoredRanges
     : [...delimiterIgnoredRanges, frontmatterRange];
+  const percentCommentRanges = findPercentCommentRanges(
+    source,
+    delimiterIgnoredRangesWithFrontmatter
+  );
+  const blockProtectedRanges = [
+    ...blockIgnoredRangesWithFrontmatter,
+    ...percentCommentRanges
+  ];
   const protectedRanges = [
     ...delimiterIgnoredRangesWithFrontmatter,
-    ...findPercentCommentRanges(source, delimiterIgnoredRangesWithFrontmatter)
+    ...percentCommentRanges
   ];
 
   return {
+    blocks: blocks.filter((block) =>
+      blockProtectedRanges.every(
+        (range) => !containsOffset(range, block.start)
+      )
+    ),
     containers,
     headings: headings.filter((heading) =>
       protectedRanges.every(
         (range) => !containsOffset(range, heading.syntaxStart)
       )
-    )
+    ),
+    protectedRanges: blockProtectedRanges
   };
 }
 
-function containsOffset(range: SourceRange, offset: number): boolean {
+function containsOffset(range: MarkdownRange, offset: number): boolean {
   return range.from <= offset && offset < range.to;
 }
 
@@ -134,7 +182,7 @@ function createContainer(
   };
 }
 
-function findFrontmatterRange(source: string): null | SourceRange {
+function findFrontmatterRange(source: string): MarkdownRange | null {
   const contentStart = source.startsWith('\u{FEFF}') ? 1 : 0;
   const firstLineEnd = source.indexOf('\n', contentStart);
   const firstLine = source
@@ -164,9 +212,9 @@ function findFrontmatterRange(source: string): null | SourceRange {
 
 function findPercentCommentRanges(
   source: string,
-  delimiterIgnoredRanges: readonly SourceRange[]
-): SourceRange[] {
-  const ranges: SourceRange[] = [];
+  delimiterIgnoredRanges: readonly MarkdownRange[]
+): MarkdownRange[] {
+  const ranges: MarkdownRange[] = [];
   let open: null | number = null;
   let searchFrom = 0;
 
@@ -210,4 +258,13 @@ function getLineEndIncludingBreak(source: string, offset: number): number {
 
 function getLineStart(source: string, offset: number): number {
   return source.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+}
+
+function isCallout(source: string, node: MarkdownNode): boolean {
+  const lineEnd = source.indexOf('\n', node.from);
+  const openingLine = source
+    .slice(node.from, lineEnd === -1 ? source.length : lineEnd)
+    .replace(/\r$/u, '')
+    .replace(/^[\t ]*>[\t ]?/u, '');
+  return /^\[![a-z\d-]+\][+-]?(?:[\t ]|$)/iu.test(openingLine);
 }
