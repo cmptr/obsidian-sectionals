@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
-import { planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
+import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
 
 function contextualRangeText(
   source: string,
@@ -21,6 +21,138 @@ function rangeText(
   const range = planSectionDeletion(source, cursor, mode);
   return range === null ? null : source.slice(range.from, range.to);
 }
+
+describe('collectDeletionTargets', () => {
+  const nestedSource = [
+    '# Setup',
+    '> Outer quote',
+    '> > [!note]',
+    '> > ```ts',
+    '> > code',
+    '> > ```',
+    '> Tail',
+    '## Child',
+    'child',
+    '# Keep',
+    ''
+  ].join('\n');
+
+  it('returns existing command scopes from smallest to largest', () => {
+    const targets = collectDeletionTargets(
+      nestedSource,
+      nestedSource.indexOf('code')
+    );
+
+    expect(
+      targets.map(({ kinds, range }) => ({ kinds, range }))
+    ).toEqual([
+      {
+        kinds: ['fenced-code'],
+        range: {
+          from: nestedSource.indexOf('> > ```ts'),
+          to: nestedSource.indexOf('> Tail')
+        }
+      },
+      {
+        kinds: ['callout'],
+        range: {
+          from: nestedSource.indexOf('> > [!note]'),
+          to: nestedSource.indexOf('> Tail')
+        }
+      },
+      {
+        kinds: ['blockquote'],
+        range: {
+          from: nestedSource.indexOf('> Outer quote'),
+          to: nestedSource.indexOf('## Child')
+        }
+      },
+      {
+        kinds: ['heading-block'],
+        range: { from: 0, to: nestedSource.indexOf('## Child') }
+      },
+      {
+        kinds: ['section'],
+        range: { from: 0, to: nestedSource.indexOf('# Keep') }
+      }
+    ]);
+  });
+
+  it('merges identical section and heading-block ranges', () => {
+    const source = '# Installation\nbody\n# Keep\n';
+    const keepStart = source.indexOf('# Keep');
+
+    expect(collectDeletionTargets(source, source.indexOf('body'))).toEqual([
+      {
+        detail: null,
+        kinds: ['section', 'heading-block'],
+        lineCount: 2,
+        range: { from: 0, to: keepStart }
+      }
+    ]);
+  });
+
+  it('suppresses contextual targets inside a protected nested span', () => {
+    const source = [
+      '# Setup',
+      '> Outer quote',
+      '> %%',
+      '> hidden',
+      '> %%',
+      '> tail',
+      '# Keep',
+      ''
+    ].join('\n');
+
+    expect(
+      collectDeletionTargets(source, source.indexOf('hidden')).map(
+        ({ kinds, range }) => ({ kinds, range })
+      )
+    ).toEqual([
+      {
+        kinds: ['section', 'heading-block'],
+        range: { from: 0, to: source.indexOf('# Keep') }
+      }
+    ]);
+  });
+
+  it('returns only the nearest blockquote of the existing command semantic', () => {
+    const source = '> outer\n> > inner\n> > cursor\n';
+    const targets = collectDeletionTargets(source, source.indexOf('cursor'));
+
+    expect(targets.map(({ kinds, range }) => ({ kinds, range }))).toEqual([
+      {
+        kinds: ['blockquote'],
+        range: { from: source.indexOf('> > inner'), to: source.length }
+      }
+    ]);
+  });
+
+  it.each([-1, 4])('returns no targets for invalid offset %i', (cursor) => {
+    expect(collectDeletionTargets('abc', cursor)).toEqual([]);
+  });
+
+  it('returns no targets for a non-integer offset', () => {
+    expect(collectDeletionTargets('abc', 1.5)).toEqual([]);
+  });
+
+  it('counts a final line without a trailing line break', () => {
+    const source = '# Final\nbody';
+
+    expect(collectDeletionTargets(source, source.indexOf('body'))).toEqual([
+      {
+        detail: null,
+        kinds: ['section', 'heading-block'],
+        lineCount: 2,
+        range: { from: 0, to: source.length }
+      }
+    ]);
+  });
+
+  it('returns no targets in unterminated single-line frontmatter', () => {
+    expect(collectDeletionTargets('---', 0)).toEqual([]);
+  });
+});
 
 describe('planSectionDeletion', () => {
   const hierarchy = '# Root\nintro\n## Target\nbody\n### Child\nchild body\n## Next\nkeep\n';
