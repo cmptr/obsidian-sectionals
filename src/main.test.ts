@@ -5,9 +5,11 @@ import type { MockInstance } from 'vitest';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it, vi } from 'vitest';
 
-import type { DeletionRange } from './deletion-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import type { DeletionRange, DeletionTarget } from './deletion-planner.ts';
 
-import DeleteSectionsPlugin, { executeDeleteCommand } from './main.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible main imports compact.
+import DeleteSectionsPlugin, { executeDeleteCommand, executeStructurePickerCommand } from './main.ts';
 
 interface EditorFixture {
   editor: SectionEditor;
@@ -152,11 +154,145 @@ describe('executeDeleteCommand', () => {
   });
 });
 
+describe('executeStructurePickerCommand', () => {
+  it('opens the picker with targets from the active selection head', () => {
+    const source = '# Setup\nbody\n';
+    const { editor, replaceRange } = createEditor(
+      source,
+      source.indexOf('body')
+    );
+    const targets: readonly DeletionTarget[] = [
+      {
+        detail: 'Setup',
+        kinds: ['section', 'heading-block'],
+        lineCount: 2,
+        range: { from: 0, to: source.length }
+      }
+    ];
+    const collector = vi.fn(() => targets);
+    const openPicker = vi.fn();
+
+    executeStructurePickerCommand(
+      {} as App,
+      editor,
+      vi.fn(),
+      collector,
+      openPicker
+    );
+
+    expect(collector).toHaveBeenCalledWith(source, source.indexOf('body'));
+    expect(openPicker).toHaveBeenCalledOnce();
+    expect(openPicker.mock.calls[0]?.[1]).toBe(targets);
+    expect(replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('notifies without opening when no structure is available', () => {
+    const { editor, replaceRange } = createEditor('plain text\n', 2);
+    const notify = vi.fn();
+    const openPicker = vi.fn();
+
+    executeStructurePickerCommand(
+      {} as App,
+      editor,
+      notify,
+      () => [],
+      openPicker
+    );
+
+    expect(notify).toHaveBeenCalledWith('No deletable structure found.');
+    expect(openPicker).not.toHaveBeenCalled();
+    expect(replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when structure collection throws', () => {
+    const { editor, replaceRange } = createEditor('# Setup\n', 2);
+    const notify = vi.fn();
+
+    executeStructurePickerCommand(
+      {} as App,
+      editor,
+      notify,
+      () => {
+        throw new Error('parse failed');
+      },
+      vi.fn()
+    );
+
+    expect(notify).toHaveBeenCalledWith(
+      'Unable to determine structures to delete.'
+    );
+    expect(replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('applies the chosen target in one editor transaction', () => {
+    const source = '# Setup\nbody\n# Keep\n';
+    const { editor, replaceRange, setCursor } = createEditor(source, 10);
+    const target: DeletionTarget = {
+      detail: 'Setup',
+      kinds: ['section'],
+      lineCount: 2,
+      range: { from: 0, to: source.indexOf('# Keep') }
+    };
+    let chooseTarget: ((target: DeletionTarget) => void) | undefined;
+
+    executeStructurePickerCommand(
+      {} as App,
+      editor,
+      vi.fn(),
+      () => [target],
+      (_app, _targets, choose) => {
+        chooseTarget = choose;
+      }
+    );
+
+    expect(replaceRange).not.toHaveBeenCalled();
+    chooseTarget?.(target);
+    expect(replaceRange).toHaveBeenCalledOnce();
+    expect(replaceRange).toHaveBeenCalledWith(
+      '',
+      { ch: 0, line: 0 },
+      { ch: source.indexOf('# Keep'), line: 0 }
+    );
+    expect(setCursor).toHaveBeenCalledWith({ ch: 0, line: 0 });
+  });
+
+  it('rejects a target when the editor changed while the picker was open', () => {
+    const source = '# Setup\nbody\n';
+    const { editor, replaceRange } = createEditor(source, 2);
+    const notify = vi.fn();
+    const target: DeletionTarget = {
+      detail: 'Setup',
+      kinds: ['section'],
+      lineCount: 2,
+      range: { from: 0, to: source.length }
+    };
+    let chooseTarget: ((target: DeletionTarget) => void) | undefined;
+
+    executeStructurePickerCommand(
+      {} as App,
+      editor,
+      notify,
+      () => [target],
+      (_app, _targets, choose) => {
+        chooseTarget = choose;
+      }
+    );
+    vi.mocked(editor.getValue).mockReturnValue(`${source}changed\n`);
+
+    chooseTarget?.(target);
+
+    expect(notify).toHaveBeenCalledWith(
+      'Note changed; reopen the structure picker.'
+    );
+    expect(replaceRange).not.toHaveBeenCalled();
+  });
+});
+
 describe('DeleteSectionsPlugin', () => {
   it('registers exact editor-only command metadata without hotkeys', () => {
     const { addCommand } = loadPluginCommands();
 
-    expect(addCommand).toHaveBeenCalledTimes(5);
+    expect(addCommand).toHaveBeenCalledTimes(6);
     expect(
       addCommand.mock.calls.map(([command]) => ({
         callback: command.callback,
@@ -206,6 +342,14 @@ describe('DeleteSectionsPlugin', () => {
         hotkeys: undefined,
         id: 'delete-current-blockquote',
         name: 'Delete current blockquote'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'function',
+        editorCheckCallback: 'undefined',
+        hotkeys: undefined,
+        id: 'delete-current-structure',
+        name: 'Delete current structure…'
       }
     ]);
   });

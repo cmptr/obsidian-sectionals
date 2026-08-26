@@ -1,17 +1,22 @@
-import type { Editor } from 'obsidian';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
+import type { App, Editor } from 'obsidian';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
 import { Notice, Plugin } from 'obsidian';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
-import type { DeletionMode, DeletionRange } from './deletion-planner.ts';
+import type { DeletionMode, DeletionRange, DeletionTarget } from './deletion-planner.ts';
 import type { MarkdownBlockKind } from './markdown-structure.ts';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
-import { planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
+import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
+import { openDeletionTargetPicker } from './deletion-target-modal.ts';
 
 export const NO_TARGET_NOTICE = 'No containing heading found.';
 export const PARSE_FAILURE_NOTICE = 'Unable to determine the section to delete.';
+export const NO_STRUCTURE_TARGET_NOTICE = 'No deletable structure found.';
+export const STALE_STRUCTURE_TARGET_NOTICE = 'Note changed; reopen the structure picker.';
+export const STRUCTURE_PARSE_FAILURE_NOTICE = 'Unable to determine structures to delete.';
 
 interface ContextualDeleteCommand {
   readonly id: string;
@@ -25,6 +30,11 @@ interface DeleteCommand {
   readonly name: string;
 }
 type Notify = (message: string) => void;
+type OpenStructureTargetPicker = (
+  app: App,
+  targets: readonly DeletionTarget[],
+  chooseTarget: (target: DeletionTarget) => void
+) => void;
 type Planner<Mode extends string> = (
   source: string,
   cursorOffset: number,
@@ -39,6 +49,10 @@ type SectionEditor = Pick<
   | 'replaceRange'
   | 'setCursor'
 >;
+type StructureTargetCollector = (
+  source: string,
+  cursorOffset: number
+) => readonly DeletionTarget[];
 
 const COMMANDS: readonly DeleteCommand[] = [
   {
@@ -97,6 +111,18 @@ export default class DeleteSectionsPlugin extends Plugin {
         name: command.name
       });
     }
+
+    this.addCommand({
+      editorCallback: (editor) => {
+        executeStructurePickerCommand(
+          this.app,
+          editor,
+          (message) => new Notice(message)
+        );
+      },
+      id: 'delete-current-structure',
+      name: 'Delete current structure…'
+    });
   }
 }
 
@@ -120,6 +146,38 @@ export function executeDeleteCommand(
   }
 
   applyDeletionRange(editor, range);
+}
+
+export function executeStructurePickerCommand(
+  app: App,
+  editor: SectionEditor,
+  notify: Notify,
+  collector: StructureTargetCollector = collectDeletionTargets,
+  openPicker: OpenStructureTargetPicker = openDeletionTargetPicker
+): void {
+  const source = editor.getValue();
+  const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+
+  let targets: readonly DeletionTarget[];
+  try {
+    targets = collector(source, cursorOffset);
+  } catch {
+    notify(STRUCTURE_PARSE_FAILURE_NOTICE);
+    return;
+  }
+
+  if (targets.length === 0) {
+    notify(NO_STRUCTURE_TARGET_NOTICE);
+    return;
+  }
+
+  openPicker(app, targets, (target) => {
+    if (editor.getValue() !== source) {
+      notify(STALE_STRUCTURE_TARGET_NOTICE);
+      return;
+    }
+    applyDeletionRange(editor, target.range);
+  });
 }
 
 function applyDeletionRange(editor: SectionEditor, range: DeletionRange): void {
