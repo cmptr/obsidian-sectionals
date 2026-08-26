@@ -317,9 +317,10 @@ function getBlockDetail(
     if (openingLine === undefined) {
       return null;
     }
-    // eslint-disable-next-line prefer-named-capture-group -- Match the optional info token by its only capture.
-    return /^(?:`{3,}|~{3,})[\t ]*([^\s`~]+)?/u.exec(openingLine)?.[1]
-      ?? null;
+    const infoPattern = openingLine.startsWith('`')
+      ? /^`{3,}[\t ]*(?<info>[^\s`]+)?/u
+      : /^~{3,}[\t ]*(?<info>\S+)?/u;
+    return infoPattern.exec(openingLine)?.groups?.['info'] ?? null;
   }
 
   return normalized.find((line) => line !== '') ?? null;
@@ -338,10 +339,16 @@ function getHeadingDetail(
     if (line === '' || /^[=-]+$/u.test(line)) {
       continue;
     }
-    return line
-      .replace(/^#{1,6}(?:[\t ]+|$)/u, '')
-      .replace(/[\t ]+#+[\t ]*$/u, '')
-      .trim() || null;
+    const openingAtxPattern = /^#{1,6}(?:[\t ]+|$)/u;
+    if (!openingAtxPattern.test(line)) {
+      return line;
+    }
+
+    const body = line.replace(openingAtxPattern, '');
+    if (/^#+$/u.test(body)) {
+      return null;
+    }
+    return body.replace(/[\t ]+#+[\t ]*$/u, '').trim() || null;
   }
   return null;
 }

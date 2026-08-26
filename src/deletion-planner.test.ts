@@ -119,6 +119,16 @@ describe('collectDeletionTargets', () => {
       source: '~~~rust extra\nfn main() {}\n~~~\n'
     },
     {
+      expected: 'Fenced code · foo~bar · 3 lines',
+      name: 'backtick fence info token containing a tilde',
+      source: '```foo~bar\ncode\n```\n'
+    },
+    {
+      expected: 'Fenced code · foo`bar · 3 lines',
+      name: 'tilde fence info token containing a backtick',
+      source: '~~~foo`bar\ncode\n~~~\n'
+    },
+    {
       expected: 'Fenced code · 3 lines',
       name: 'fence without info string',
       source: '```\ncode\n```\n'
@@ -132,6 +142,16 @@ describe('collectDeletionTargets', () => {
       expected: 'Section + heading block · **Install** · 2 lines',
       name: 'ATX heading with inline Markdown and closing hashes',
       source: '# **Install** ###\nbody\n'
+    },
+    {
+      expected: 'Section + heading block · Title # · 3 lines',
+      name: 'Setext heading ending in a content hash',
+      source: 'Title #\n===\nbody\n'
+    },
+    {
+      expected: 'Section + heading block · 2 lines',
+      name: 'ATX heading containing only closing hashes',
+      source: '# #\nbody\n'
     },
     {
       expected: 'Callout · NOTE · 2 lines',
