@@ -6,3 +6,17 @@ main.js
 node_modules/
 *.tsbuildinfo
 *.zip
+
+# Agent tooling
+.claude/
+.agents/
+.agent/
+.pi/
+.cursor/
+.codex/
+.gemini/
+.aider/
+.continue/
+.roo/
+.windsurf/
+docs/superpowers/
