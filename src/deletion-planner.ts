@@ -64,6 +64,14 @@ const TARGET_KIND_PRIORITY = [
   'heading-block'
 ] as const satisfies readonly DeletionTargetKind[];
 
+const TARGET_KIND_LABELS = {
+  'blockquote': 'blockquote',
+  'callout': 'callout',
+  'fenced-code': 'fenced code',
+  'heading-block': 'heading block',
+  'section': 'section'
+} as const satisfies Readonly<Record<DeletionTargetKind, string>>;
+
 export function collectDeletionTargets(
   source: string,
   cursorOffset: number
@@ -78,7 +86,7 @@ export function collectDeletionTargets(
     const block = findContextualBlock(context, kind);
     if (block !== null) {
       candidates.push({
-        detail: null,
+        detail: getBlockDetail(source, block),
         kind,
         range: { from: block.start, to: block.end }
       });
@@ -88,11 +96,24 @@ export function collectDeletionTargets(
   for (const mode of ['section', 'heading-block'] as const) {
     const planned = planHeadingDeletion(context, mode);
     if (planned !== null) {
-      candidates.push({ detail: null, kind: mode, range: planned.range });
+      candidates.push({
+        detail: getHeadingDetail(source, planned.heading),
+        kind: mode,
+        range: planned.range
+      });
     }
   }
 
   return mergeDeletionCandidates(source, candidates);
+}
+
+export function formatDeletionTarget(target: DeletionTarget): string {
+  const lineLabel = target.lineCount === 1
+    ? '1 line'
+    : `${String(target.lineCount)} lines`;
+  return [formatTargetKinds(target.kinds), target.detail, lineLabel]
+    .filter((part): part is string => part !== null && part !== '')
+    .join(' · ');
 }
 
 export function planContextualDeletion(
@@ -268,6 +289,63 @@ function findTarget(
   return target;
 }
 
+function formatTargetKinds(kinds: DeletionTarget['kinds']): string {
+  const joined = kinds.map((kind) => TARGET_KIND_LABELS[kind]).join(' + ');
+  return joined.charAt(0).toUpperCase() + joined.slice(1);
+}
+
+function getBlockDetail(
+  source: string,
+  block: MarkdownBlock
+): null | string {
+  const lines = sourceLines(source, { from: block.start, to: block.end });
+  const normalized = lines.map((line) => stripQuotePrefixes(line).trim());
+
+  if (block.kind === 'callout') {
+    for (const line of normalized) {
+      // eslint-disable-next-line prefer-named-capture-group -- Match the source-preserving callout type by its only capture.
+      const match = /^\[!([a-z\d-]+)\]/iu.exec(line);
+      if (match?.[1] !== undefined) {
+        return match[1];
+      }
+    }
+    return null;
+  }
+
+  if (block.kind === 'fenced-code') {
+    const openingLine = normalized.find((line) => line !== '');
+    if (openingLine === undefined) {
+      return null;
+    }
+    // eslint-disable-next-line prefer-named-capture-group -- Match the optional info token by its only capture.
+    return /^(?:`{3,}|~{3,})[\t ]*([^\s`~]+)?/u.exec(openingLine)?.[1]
+      ?? null;
+  }
+
+  return normalized.find((line) => line !== '') ?? null;
+}
+
+function getHeadingDetail(
+  source: string,
+  heading: MarkdownHeading
+): null | string {
+  const lines = source
+    .slice(heading.lineStart, heading.syntaxEnd)
+    .split('\n')
+    .map((line) => stripQuotePrefixes(line.replace(/\r$/u, '')).trim());
+
+  for (const line of lines) {
+    if (line === '' || /^[=-]+$/u.test(line)) {
+      continue;
+    }
+    return line
+      .replace(/^#{1,6}(?:[\t ]+|$)/u, '')
+      .replace(/[\t ]+#+[\t ]*$/u, '')
+      .trim() || null;
+  }
+  return null;
+}
+
 function getTargetKindPriority(kind: DeletionTargetKind): number {
   return TARGET_KIND_PRIORITY.indexOf(kind);
 }
@@ -352,4 +430,15 @@ function planHeadingDeletion(
     return null;
   }
   return { heading, range };
+}
+
+function sourceLines(source: string, range: DeletionRange): string[] {
+  return source
+    .slice(range.from, range.to)
+    .split('\n')
+    .map((line) => line.replace(/\r$/u, ''));
+}
+
+function stripQuotePrefixes(line: string): string {
+  return line.replace(/^(?:[\t ]*>[\t ]?)*/u, '');
 }

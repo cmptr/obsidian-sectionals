@@ -1,8 +1,12 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
-import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
+import {
+  collectDeletionTargets,
+  formatDeletionTarget,
+  planContextualDeletion,
+  planSectionDeletion
+} from './deletion-planner.ts';
 
 function contextualRangeText(
   source: string,
@@ -78,13 +82,106 @@ describe('collectDeletionTargets', () => {
     ]);
   });
 
+  it('formats source-derived details and physical line counts', () => {
+    const targets = collectDeletionTargets(
+      nestedSource,
+      nestedSource.indexOf('code')
+    );
+
+    expect(targets.map((target) => formatDeletionTarget(target))).toEqual([
+      'Fenced code · ts · 3 lines',
+      'Callout · note · 4 lines',
+      'Blockquote · Outer quote · 6 lines',
+      'Heading block · Setup · 7 lines',
+      'Section · Setup · 9 lines'
+    ]);
+  });
+
+  it('formats merged heading semantics and singular lines', () => {
+    const source = '# Installation\n# Keep\n';
+
+    expect(
+      collectDeletionTargets(source, source.indexOf('Installation')).map(
+        (target) => formatDeletionTarget(target)
+      )
+    ).toEqual(['Section + heading block · Installation · 1 line']);
+  });
+
+  it.each([
+    {
+      expected: 'Section + heading block · First title · 4 lines',
+      name: 'multiline Setext heading',
+      source: 'First title\nsecond title\n===\nbody\n'
+    },
+    {
+      expected: 'Fenced code · rust · 3 lines',
+      name: 'tilde fence info token',
+      source: '~~~rust extra\nfn main() {}\n~~~\n'
+    },
+    {
+      expected: 'Fenced code · 3 lines',
+      name: 'fence without info string',
+      source: '```\ncode\n```\n'
+    },
+    {
+      expected: 'Blockquote · Quoted text · 2 lines',
+      name: 'blockquote after empty marker line',
+      source: '>\n> Quoted text\n'
+    },
+    {
+      expected: 'Section + heading block · **Install** · 2 lines',
+      name: 'ATX heading with inline Markdown and closing hashes',
+      source: '# **Install** ###\nbody\n'
+    },
+    {
+      expected: 'Callout · NOTE · 2 lines',
+      name: 'callout type with source spelling',
+      source: '> [!NOTE] Title\n> body\n'
+    },
+    {
+      expected: 'Section + heading block · Setup · 2 lines',
+      name: 'CRLF physical line counting',
+      source: '# Setup\r\nbody\r\n'
+    }
+  ])('formats $name', ({ expected, source }) => {
+    /* eslint-disable unicorn/no-nested-ternary -- Keep the required table fixture cursor selection local. */
+    const cursor = source.includes('code')
+      ? source.indexOf('code')
+      : source.includes('main')
+      ? source.indexOf('main')
+      : source.includes('Quoted')
+      ? source.indexOf('Quoted')
+      : source.indexOf('body');
+    /* eslint-enable unicorn/no-nested-ternary -- Required table fixture cursor selection ends here. */
+
+    expect(
+      collectDeletionTargets(source, cursor).map((target) => formatDeletionTarget(target))
+    ).toContain(expected);
+  });
+
+  it('omits a detail for a marker-only ATX heading', () => {
+    const source = '# \nbody\n';
+
+    expect(
+      collectDeletionTargets(source, source.indexOf('body')).map((target) => formatDeletionTarget(target))
+    ).toEqual(['Section + heading block · 2 lines']);
+  });
+
+  it('omits a detail for an empty blockquote', () => {
+    const source = '>\n';
+
+    expect(
+      collectDeletionTargets(source, 0).map((target) => formatDeletionTarget(target))
+    ).toEqual(['Blockquote · 1 line']);
+  });
+
   it('merges identical section and heading-block ranges', () => {
     const source = '# Installation\nbody\n# Keep\n';
     const keepStart = source.indexOf('# Keep');
 
     expect(collectDeletionTargets(source, source.indexOf('body'))).toEqual([
       {
-        detail: null,
+        detail: 'Installation',
         kinds: ['section', 'heading-block'],
         lineCount: 2,
         range: { from: 0, to: keepStart }
@@ -141,7 +238,7 @@ describe('collectDeletionTargets', () => {
 
     expect(collectDeletionTargets(source, source.indexOf('body'))).toEqual([
       {
-        detail: null,
+        detail: 'Final',
         kinds: ['section', 'heading-block'],
         lineCount: 2,
         range: { from: 0, to: source.length }
