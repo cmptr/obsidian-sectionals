@@ -4,6 +4,20 @@ Delete the Markdown section or structural block containing the cursor without se
 
 Sectionals is an Obsidian plugin for deleting whole pieces of Markdown based on where your cursor is. Put the cursor inside a section, heading block, fenced code block, callout, or blockquote, then run the matching command. Sectionals finds the boundaries and removes the whole thing in one undoable edit.
 
+## Installation
+
+Once Sectionals is available in the community plugin directory:
+
+1. Open **Settings → Community plugins** in Obsidian.
+2. Select **Browse**, search for **Sectionals**, and install it.
+3. Enable Sectionals from the installed plugins list.
+
+For a manual installation, download `main.js` and `manifest.json` from the latest GitHub release. Copy both files into `<vault>/.obsidian/plugins/sectionals/`, then reload Obsidian and enable Sectionals under **Community plugins**.
+
+## Usage
+
+Open a Markdown note and place the cursor inside the structure you want to remove. Open the command palette, search for **Sectionals**, and choose a deletion command. To assign a keyboard shortcut, open **Settings → Hotkeys**, search for **Sectionals**, and set a hotkey for the command you use.
+
 ## Commands
 
 - **Delete current section** removes the current heading, its contents, and all of its subsections. It stops at the next heading of the same or a higher level.

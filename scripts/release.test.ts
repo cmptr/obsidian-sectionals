@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 
@@ -62,5 +63,28 @@ describe('assertArchiveEntries', () => {
     expect(() => {
       assertArchiveEntries(['main.js', 'manifest.json', 'styles.css']);
     }).toThrow('exactly main.js, then manifest.json');
+  });
+});
+
+describe('release workflow', () => {
+  const workflow = readFileSync('.github/workflows/release.yml', 'utf-8');
+
+  it('requires release tags to point to commits on master', () => {
+    expect(workflow).toContain('fetch-depth: 0');
+    expect(workflow).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/master');
+  });
+
+  it('attests each supported release asset separately', () => {
+    expect(workflow.match(/subject-path: dist\/build\/main\.js/g)).toHaveLength(1);
+    expect(workflow.match(/subject-path: dist\/build\/manifest\.json/g)).toHaveLength(1);
+    expect(workflow).not.toContain('subject-path: |');
+  });
+
+  it('publishes only supported Obsidian release assets', () => {
+    const publishStep = workflow.slice(workflow.indexOf('- name: Publish GitHub release'));
+
+    expect(publishStep).toContain('dist/build/main.js');
+    expect(publishStep).toContain('dist/build/manifest.json');
+    expect(publishStep).not.toContain('dist/release');
   });
 });

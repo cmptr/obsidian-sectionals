@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Correct release provenance and packaging, and add installation and usage instructions.
+
 ## 0.1.0
 
 - Add context-sensitive commands for deleting fenced code blocks, callouts, and plain blockquotes.

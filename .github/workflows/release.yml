@@ -21,7 +21,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify release commit is on master
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/master
 
       - name: Install pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
@@ -45,13 +49,15 @@ jobs:
       - name: Build release artifacts
         run: make release
 
-      - name: Attest build provenance
+      - name: Attest main.js provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: |
-            dist/build/main.js
-            dist/build/manifest.json
-            dist/release/sectionals-${{ github.ref_name }}.zip
+          subject-path: dist/build/main.js
+
+      - name: Attest manifest.json provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/build/manifest.json
 
       - name: Publish GitHub release
         env:
@@ -62,5 +68,4 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             dist/build/main.js \
-            dist/build/manifest.json \
-            "dist/release/sectionals-$GITHUB_REF_NAME.zip"
+            dist/build/manifest.json
