@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.1
+
 - Correct release provenance and packaging, and add installation and usage instructions.
 
 ## 0.1.0
