@@ -1,5 +1,6 @@
 .direnv/
 .env
+.env.example
 coverage/
 dist/
 main.js
