@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.2
+
 - Place production build artifacts in `dist/` so automated build verification can find `main.js`.
 
 ## 0.1.1
