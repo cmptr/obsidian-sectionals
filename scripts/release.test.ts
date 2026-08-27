@@ -41,12 +41,12 @@ describe('validateReleaseFiles', () => {
 });
 
 describe('assertReleaseBranch', () => {
-  it('rejects release tags outside the main branch', () => {
+  it('rejects release tags outside the master branch', () => {
     expect(() => {
       assertReleaseBranch('release-candidate');
-    }).toThrow('main branch');
+    }).toThrow('master branch');
     expect(() => {
-      assertReleaseBranch('main');
+      assertReleaseBranch('master');
     }).not.toThrow();
   });
 });

@@ -99,7 +99,7 @@ tag-release: ## Validate, build, and create an annotated stable tag
 	pnpm exec jiti scripts/release.ts pretag "$(VERSION)"
 	$(MAKE) release
 	git tag -a "$(VERSION)" -m "Sectionals $(VERSION)"
-	@echo "Created tag $(VERSION). Push explicitly with: git push origin main $(VERSION)"
+	@echo "Created tag $(VERSION). Push explicitly with: git push origin master $(VERSION)"
 
 clean: ## Remove generated build and release artifacts
 	rm -rf dist coverage

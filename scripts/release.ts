@@ -24,8 +24,8 @@ export function assertArchiveEntries(entries: readonly string[]): void {
 }
 
 export function assertReleaseBranch(branch: string): void {
-  if (branch !== 'main') {
-    throw new Error(`Release tags must be created from the main branch, received: ${branch || '<detached HEAD>'}`);
+  if (branch !== 'master') {
+    throw new Error(`Release tags must be created from the master branch, received: ${branch || '<detached HEAD>'}`);
   }
 }
 
