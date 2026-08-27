@@ -66,6 +66,16 @@ describe('assertArchiveEntries', () => {
   });
 });
 
+describe('build output', () => {
+  it('places the plugin entry point where build verification can discover it', () => {
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf-8')) as Record<string, unknown>;
+    const makefile = readFileSync('Makefile', 'utf-8');
+
+    expect(packageJson['main']).toBe('dist/main.js');
+    expect(makefile).toContain('BUILD_DIR := dist\n');
+  });
+});
+
 describe('release workflow', () => {
   const workflow = readFileSync('.github/workflows/release.yml', 'utf-8');
 
@@ -75,16 +85,16 @@ describe('release workflow', () => {
   });
 
   it('attests each supported release asset separately', () => {
-    expect(workflow.match(/subject-path: dist\/build\/main\.js/g)).toHaveLength(1);
-    expect(workflow.match(/subject-path: dist\/build\/manifest\.json/g)).toHaveLength(1);
+    expect(workflow.match(/subject-path: dist\/main\.js/g)).toHaveLength(1);
+    expect(workflow.match(/subject-path: dist\/manifest\.json/g)).toHaveLength(1);
     expect(workflow).not.toContain('subject-path: |');
   });
 
   it('publishes only supported Obsidian release assets', () => {
     const publishStep = workflow.slice(workflow.indexOf('- name: Publish GitHub release'));
 
-    expect(publishStep).toContain('dist/build/main.js');
-    expect(publishStep).toContain('dist/build/manifest.json');
+    expect(publishStep).toContain('dist/main.js');
+    expect(publishStep).toContain('dist/manifest.json');
     expect(publishStep).not.toContain('dist/release');
   });
 });

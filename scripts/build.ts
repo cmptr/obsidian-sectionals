@@ -9,12 +9,12 @@ import { removePnpmOnlyNpmConfig } from './npm-environment.ts';
 removePnpmOnlyNpmConfig();
 await wrapCliTask(async () => {
   await build();
-  await addVersionBannerToBundle();
+  await finalizeBuildArtifacts();
 });
 
-async function addVersionBannerToBundle(): Promise<void> {
-  const bundlePath = 'dist/build/main.js';
-  const bundle = await readFile(bundlePath, 'utf-8');
-  const manifestSource = await readFile('manifest.json', 'utf-8');
-  await writeFile(bundlePath, addVersionBanner(bundle, manifestSource));
+async function finalizeBuildArtifacts(): Promise<void> {
+  const bundle = await readFile('dist/build/main.js', 'utf-8');
+  const manifestSource = await readFile('dist/build/manifest.json', 'utf-8');
+  await writeFile('dist/main.js', addVersionBanner(bundle, manifestSource));
+  await writeFile('dist/manifest.json', manifestSource);
 }

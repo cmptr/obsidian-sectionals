@@ -52,12 +52,12 @@ jobs:
       - name: Attest main.js provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/build/main.js
+          subject-path: dist/main.js
 
       - name: Attest manifest.json provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/build/manifest.json
+          subject-path: dist/manifest.json
 
       - name: Publish GitHub release
         env:
@@ -67,5 +67,5 @@ jobs:
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
-            dist/build/main.js \
-            dist/build/manifest.json
+            dist/main.js \
+            dist/manifest.json

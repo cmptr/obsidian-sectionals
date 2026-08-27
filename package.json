@@ -6,7 +6,7 @@
   "author": "Aaron Bell",
   "license": "MIT",
   "type": "module",
-  "main": "dist/build/main.js",
+  "main": "dist/main.js",
   "packageManager": "pnpm@10.20.0",
   "scripts": {
     "build": "jiti scripts/build.ts",
