@@ -2,58 +2,17 @@
 
 Delete the Markdown section or structural block containing the cursor without selecting it first.
 
+Sectionals is an Obsidian plugin for deleting whole pieces of Markdown based on where your cursor is. Put the cursor inside a section, heading block, fenced code block, callout, or blockquote, then run the matching command. Sectionals finds the boundaries and removes the whole thing in one undoable edit.
+
 ## Commands
 
-- **Delete current section** deletes the current heading and its subsections, stopping before the next heading of the same or a higher level.
-- **Delete current heading block** deletes the current heading block, stopping before the next heading at any level.
-- **Delete current fenced code block** deletes the enclosing backtick or tilde fenced block.
-- **Delete current callout** deletes the nearest enclosing callout.
-- **Delete current blockquote** deletes the nearest enclosing non-callout blockquote.
-- **Delete current structure…** opens a searchable picker containing every valid deletion scope under the cursor, ordered from smallest to largest. Identical section and heading-block ranges appear as one choice.
+- **Delete current section** removes the current heading, its contents, and all of its subsections. It stops at the next heading of the same or a higher level.
+- **Delete current heading block** removes the current heading and its contents but leaves its subsections alone. It stops at the next heading of any level.
+- **Delete current fenced code block** removes the whole fenced block, whether it uses backticks or tildes.
+- **Delete current callout** removes the callout around the cursor.
+- **Delete current blockquote** removes the plain blockquote around the cursor without treating callouts as blockquotes.
+- **Delete current structure…** shows everything Sectionals can delete at the cursor, ordered from smallest to largest. If a section and heading block cover the same text, they appear as one choice.
 
-The picker always asks you to choose a scope, even when only one target is available. Existing direct commands remain available for zero-dialog deletion and custom hotkeys.
+Use the picker when you want to see your options. It always waits for you to choose, even when there is only one choice. For a faster workflow, run a direct command or give it a hotkey.
 
-All commands use the active selection head. The three structural-block commands appear only when their target exists at the cursor. When targets overlap, each distinct command is available so the deletion scope remains explicit. The heading commands retain their broader behavior: deleting a section also deletes any fenced code blocks, blockquotes, or callouts contained in that section.
-
-Heading detection supports ATX and Setext headings in root notes, blockquotes, and callouts while ignoring heading-like text in code and comments. If there is no containing heading, a heading command leaves the note unchanged.
-
-## Development
-
-```sh
-make install
-make check
-make symlink
-make reload
-```
-
-`VAULT` defaults to `~/Obsidian/SELF`. Override it with `make symlink VAULT=/path/to/vault` or set `OBSIDIAN_VAULT` in `.env`.
-
-Run `make help` for all available commands.
-
-## Manual smoke checklist
-
-Test on desktop and mobile with a disposable note:
-
-- Discover both heading commands in the command palette.
-- Confirm each structural-block command appears only when the cursor has a matching target.
-- Delete an ATX section containing nested subheadings.
-- Delete only a heading block before a nested subheading.
-- Delete a Setext section.
-- Delete a multiline fenced code block without deleting its enclosing section or callout.
-- Delete a plain blockquote without affecting adjacent content.
-- Delete a callout without affecting its enclosing section or blockquote.
-- Confirm overlapping fenced-block, callout, and heading targets remain separately available.
-- Confirm heading-like lines in fenced code and `%%` comments are ignored.
-- Run a heading command before the first heading and confirm the no-target notice appears without an edit.
-- Undo a successful deletion once and confirm the entire target returns.
-- Open **Delete current structure…** inside a fence nested in a callout, blockquote, and section; confirm choices appear from smallest to largest.
-- Type part of a structure type or detail and confirm native fuzzy filtering finds it.
-- Use arrow keys and Enter to choose a target; reopen and press Escape to confirm no edit occurs.
-- Invoke the picker where section and heading-block ranges match; confirm one **Section + heading block** choice appears.
-- Invoke the picker with one valid target and confirm it still waits for selection.
-- Change the note while the picker is open and confirm the stale-source notice prevents deletion.
-- Repeat picker selection by touch in mobile emulation and confirm native undo restores the deletion once.
-
-## License
-
-MIT
+If you have text selected, Sectionals uses the cursor at the active end of the selection. The fenced code block, callout, and blockquote commands only appear when the cursor is inside the matching structure. When structures overlap, Sectionals keeps each distinct choice available so you decide exactly how much to remove. Deleting a section also removes any fenced code blocks, blockquotes, or callouts inside it.
