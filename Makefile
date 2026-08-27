@@ -17,7 +17,8 @@ ZIP_NAME := $(PLUGIN_ID)-$(VERSION).zip
 ARTIFACTS := main.js manifest.json
 
 .PHONY: help install dev build typecheck lint format test test-watch check \
- validate-vault link symlink unlink reload release clean
+ validate-vault link symlink unlink reload prepare-release validate-release \
+ release tag-release clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*?## "; printf "Usage: make <target> [VAULT=/path/to/vault]\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -78,13 +79,27 @@ reload: symlink ## Refresh links and trigger the Hot Reload plugin
 	touch "$(PLUGIN_DIR)/.hotreload"
 	@echo "Reload triggered (requires the Hot Reload community plugin)"
 
-release: check ## Build and package an Obsidian release zip
+prepare-release: ## Update release files (requires VERSION=x.y.z)
+	test "$(origin VERSION)" = "command line" || { echo "Usage: make prepare-release VERSION=x.y.z"; exit 1; }
+	pnpm exec jiti scripts/release.ts prepare "$(VERSION)"
+
+validate-release: ## Verify synchronized release versions and changelog
+	pnpm exec jiti scripts/release.ts validate "$(VERSION)"
+
+release: validate-release check ## Build and package an Obsidian release zip
 	command -v python3 >/dev/null || { echo "python3 is required to package releases"; exit 1; }
 	rm -rf "$(RELEASE_DIR)"
 	mkdir -p "$(RELEASE_DIR)"
 	cp $(addprefix "$(BUILD_DIR)/",$(ARTIFACTS)) "$(RELEASE_DIR)/"
 	cd "$(RELEASE_DIR)" && python3 -c "import zipfile; files=['main.js','manifest.json']; archive=zipfile.ZipFile('$(ZIP_NAME)', 'w', zipfile.ZIP_DEFLATED); [archive.write(file) for file in files]; archive.close()"
+	pnpm exec jiti scripts/release.ts verify-archive "$(RELEASE_DIR)/$(ZIP_NAME)"
 	@echo "Release artifact: $(RELEASE_DIR)/$(ZIP_NAME)"
+
+tag-release: ## Validate, build, and create an annotated stable tag
+	pnpm exec jiti scripts/release.ts pretag "$(VERSION)"
+	$(MAKE) release
+	git tag -a "$(VERSION)" -m "Sectionals $(VERSION)"
+	@echo "Created tag $(VERSION). Push explicitly with: git push origin main $(VERSION)"
 
 clean: ## Remove generated build and release artifacts
 	rm -rf dist coverage

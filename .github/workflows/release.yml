@@ -40,32 +40,7 @@ jobs:
       - name: Validate release version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          node <<'NODE'
-          const { readFileSync } = require('node:fs');
-
-          const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
-          const tag = process.env.RELEASE_TAG;
-          const manifest = readJson('manifest.json');
-          const packageJson = readJson('package.json');
-          const versions = readJson('versions.json');
-          const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-
-          if (!tag || !semver.test(tag)) {
-            throw new Error(`Release tag must be a stable semantic version, received: ${tag ?? '<missing>'}`);
-          }
-          if (manifest.version !== tag) {
-            throw new Error(`manifest.json version ${manifest.version} does not match tag ${tag}`);
-          }
-          if (packageJson.version !== tag) {
-            throw new Error(`package.json version ${packageJson.version} does not match tag ${tag}`);
-          }
-          if (versions[tag] !== manifest.minAppVersion) {
-            throw new Error(
-              `versions.json must map ${tag} to manifest minAppVersion ${manifest.minAppVersion}`
-            );
-          }
-          NODE
+        run: pnpm exec jiti scripts/release.ts validate "$RELEASE_TAG"
 
       - name: Build release artifacts
         run: make release
