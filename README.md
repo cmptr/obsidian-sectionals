@@ -1,7 +1,5 @@
 # Sectionals
 
-Delete the Markdown section or structural block containing the cursor without selecting it first.
-
 Sectionals is an Obsidian plugin for deleting whole pieces of Markdown based on where your cursor is. Put the cursor inside a section, heading block, fenced code block, callout, or blockquote, then run the matching command. Sectionals finds the boundaries and removes the whole thing in one undoable edit.
 
 ## Installation
