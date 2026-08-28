@@ -6,8 +6,6 @@ Sectionals helps you clean up and restructure Markdown notes from wherever your 
 
 ## Installation
 
-Once Sectionals is available in the community plugin directory:
-
 1. Open **Settings → Community plugins** in Obsidian.
 2. Select **Browse**, search for **Sectionals**, and install it.
 3. Enable Sectionals from the installed plugins list.
