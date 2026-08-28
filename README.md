@@ -1,6 +1,8 @@
 # Sectionals
 
-Sectionals is an Obsidian plugin for deleting whole pieces of Markdown based on where your cursor is. Put the cursor inside a section, heading block, fenced code block, callout, or blockquote, then run the matching command. Sectionals finds the boundaries and removes the whole thing in one undoable edit.
+Remove whole parts of a note without selecting them first.
+
+Sectionals helps you clean up and restructure Markdown notes from wherever your cursor already is. Use the command palette or assign hotkeys to remove outdated topics, stale examples, callouts, and quoted passages.
 
 ## Installation
 
@@ -14,17 +16,19 @@ For a manual installation, download `main.js` and `manifest.json` from the lates
 
 ## Usage
 
-Open a Markdown note and place the cursor inside the structure you want to remove. Open the command palette, search for **Sectionals**, and choose a deletion command. To assign a keyboard shortcut, open **Settings → Hotkeys**, search for **Sectionals**, and set a hotkey for the command you use.
+Place the cursor inside the part of the note you want to remove. Open the command palette, search for **Sectionals**, and choose an action.
+
+For a faster keyboard workflow, assign hotkeys under **Settings → Hotkeys**. If several structures contain the cursor, use **Delete current structure…** to choose how much to remove.
 
 ## Commands
 
-- **Delete current section** removes the current heading, its contents, and all of its subsections. It stops at the next heading of the same or a higher level.
-- **Delete current heading block** removes the current heading and its contents but leaves its subsections alone. It stops at the next heading of any level.
-- **Delete current fenced code block** removes the whole fenced block, whether it uses backticks or tildes.
-- **Delete current callout** removes the callout around the cursor.
-- **Delete current blockquote** removes the plain blockquote around the cursor without treating callouts as blockquotes.
-- **Delete current structure…** shows everything Sectionals can delete at the cursor, ordered from smallest to largest. If a section and heading block cover the same text, they appear as one choice.
+| When you want to…                                       | Command                              |
+| ------------------------------------------------------- | ------------------------------------ |
+| Remove a topic and everything nested beneath it         | **Delete current section**           |
+| Remove one heading block while keeping its subsections  | **Delete current heading block**     |
+| Clear a complete code or configuration example          | **Delete current fenced code block** |
+| Remove a reminder, warning, or aside                    | **Delete current callout**           |
+| Remove a quoted passage formatted as a plain blockquote | **Delete current blockquote**        |
+| See the available choices before removing anything      | **Delete current structure…**        |
 
-Use the picker when you want to see your options. It always waits for you to choose, even when there is only one choice. For a faster workflow, run a direct command or give it a hotkey.
-
-If you have text selected, Sectionals uses the cursor at the active end of the selection. The fenced code block, callout, and blockquote commands only appear when the cursor is inside the matching structure. When structures overlap, Sectionals keeps each distinct choice available so you decide exactly how much to remove. Deleting a section also removes any fenced code blocks, blockquotes, or callouts inside it.
+Every deletion is one undoable edit.
