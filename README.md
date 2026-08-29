@@ -1,8 +1,8 @@
 # Sectionals
 
-Remove whole parts of a note without selecting them first.
+Manage entire Markdown sections and elements without selecting them first.
 
-Sectionals helps you clean up and organize Markdown notes from wherever your cursor already is. Use the command palette or assigned hotkeys to remove outdated material, move topics, or extract a section into its own linked note.
+Sectionals works with headings, code blocks, callouts, and quotes. Remove what no longer belongs, reorder sections as a note changes, or move a section into a note of its own.
 
 ## Installation
 
@@ -14,20 +14,24 @@ For a manual installation, download `main.js` and `manifest.json` from the lates
 
 ## Usage
 
-Place the cursor inside the part of the note you want to change. Open the command palette, search for **Sectionals**, and choose an action.
+Open the command palette, search for **Sectionals**, and choose an action. Commands have no default hotkeys, but you can assign your own under **Settings → Hotkeys**.
 
-Movement commands carry the complete current topic and its nested subsections, along with the cursor.
+Deletion commands remove the structure around the cursor. If several structures overlap, **Delete current structure…** lets you choose which one to remove.
 
-**Extract current section to linked note** moves the complete current section, including its heading and nested subsections, into a new note. It replaces the section in the source with one wikilink paragraph and keeps the source note open.
+Movement commands carry the current section and all its subsections. The cursor follows the text. **Repeat last structural action** runs the last successful movement again, even in another note.
 
-**Extract current section to new note** moves the same complete section without leaving a source placeholder, then opens the created note in the same tab. This command is available only from a normal Markdown note view. Both extraction commands use Obsidian's configured location for new notes, start the new note with the original heading text as a level-one heading, and use numbered names such as `Name 1` when needed.
+**Extract current section to linked note** moves the whole section into a new note, leaves one wikilink in its place, and keeps the source note open.
 
-Both commands check only the deepest section at the cursor. They are unavailable if that section is empty or its heading is inside a blockquote or callout, and they do not fall back to an enclosing section. Relative Markdown links and embeds are rewritten to keep pointing to the same files. Extraction stops if one cannot be resolved, or if a reference link or footnote connects the moved section to text outside it. Links elsewhere in the vault to moved descendant headings or block IDs are not updated. Extraction does not replace the movement remembered by **Repeat last structural action**.
+**Extract current section to new note** moves the whole section without leaving a link, then opens the new note in the same tab. It is available only in a normal Markdown note view.
 
-> [!warning] Undo limitation
-> Native Undo restores the source section for either extraction command but does not delete the created note. If opening the new note fails, Sectionals keeps the source removal and created note and reports the note's path.
+New notes go to Obsidian's configured new-note location. They start with the original heading as a level-one heading. If the name is taken, Sectionals adds a number such as `Name 1`.
 
-Commands have no default hotkeys. For a faster keyboard workflow, assign them under **Settings → Hotkeys**. If several structures contain the cursor, use **Delete current structure…** to choose how much to remove.
+Extraction works on the deepest section at the cursor. If that section is empty, or its heading is inside a blockquote or callout, the command is not available. It will not grab a larger section instead.
+
+Relative Markdown links and embeds keep pointing to the same files after the move. If Sectionals cannot resolve one, or a reference link or footnote is shared with text outside the section, it leaves the source note alone. Links elsewhere in the vault to headings or block IDs inside the moved section are not updated. Extraction does not replace the movement remembered by **Repeat last structural action**.
+
+> [!warning] Undo after extraction
+> Undo puts the section back in the source note, but it does not delete the note Sectionals created. If the new note cannot be opened, the source section stays removed and Sectionals tells you where it created the note.
 
 ## Commands
 
