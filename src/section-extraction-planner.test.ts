@@ -470,6 +470,48 @@ describe('createExtractionSourceEdit', () => {
       expectedWikilink: String.raw`[[Notes/Beta|Title\\\|\] # ^]]`,
       name: 'alias',
       shortestLinktext: 'Notes/Beta'
+    },
+    {
+      createdBasename: 'A[B',
+      displayTitle: 'A[B',
+      expectedWikilink: '[[A[B]]',
+      name: 'single opening bracket target',
+      shortestLinktext: 'A[B'
+    },
+    {
+      createdBasename: '[[A',
+      displayTitle: '[[A',
+      expectedWikilink: '[[[[A]]',
+      name: 'repeated opening brackets beside the outer opening delimiter',
+      shortestLinktext: '[[A'
+    },
+    {
+      createdBasename: String.raw`A[\]B`,
+      displayTitle: String.raw`A[\]B`,
+      expectedWikilink: String.raw`[[A[\\\]B]]`,
+      name: 'opening bracket target beside escaped bracket and backslash',
+      shortestLinktext: String.raw`A[\]B`
+    },
+    {
+      createdBasename: 'Beta',
+      displayTitle: 'A[B',
+      expectedWikilink: '[[Notes/Beta|A[B]]',
+      name: 'single opening bracket alias',
+      shortestLinktext: 'Notes/Beta'
+    },
+    {
+      createdBasename: 'Beta',
+      displayTitle: 'A[[',
+      expectedWikilink: '[[Notes/Beta|A[[]]',
+      name: 'repeated opening brackets beside the outer closing delimiter',
+      shortestLinktext: 'Notes/Beta'
+    },
+    {
+      createdBasename: 'Beta',
+      displayTitle: String.raw`A[[\]B`,
+      expectedWikilink: String.raw`[[Notes/Beta|A[[\\\]B]]`,
+      name: 'opening bracket alias beside escaped bracket and backslash',
+      shortestLinktext: 'Notes/Beta'
     }
   ])('applies a generated wikilink containing $name bytes', ({
     createdBasename,
@@ -510,7 +552,11 @@ describe('createExtractionSourceEdit', () => {
     String.raw`[[Beta|Alias\#Heading]]`,
     String.raw`[[Beta|Alias\^Block]]`,
     String.raw`[[Beta|Alias\q]]`,
-    '[[Beta|Alias|More]]'
+    '[[Beta|Alias|More]]',
+    '[[Beta]Tail]]',
+    '[[[Beta]]]',
+    '[[Beta]]]',
+    String.raw`[[Beta\]]`
   ])('throws TypeError for the malformed wikilink %j', (wikilink) => {
     const source = '# Beta\nbody\n';
     const draft = expectReady(source, source.indexOf('body'));

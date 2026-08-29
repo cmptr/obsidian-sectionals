@@ -243,8 +243,7 @@ function isCanonicalExtractionWikilink(wikilink: string): boolean {
       isAlias = true;
       componentFrom = index + 1;
     } else if (
-      character === '['
-      || character === ']'
+      character === ']'
       || character === '\r'
       || character === '\n'
       || (!isAlias && (character === '#' || character === '^'))
