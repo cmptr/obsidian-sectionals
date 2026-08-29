@@ -16,6 +16,8 @@ For a manual installation, download `main.js` and `manifest.json` from the lates
 
 Place the cursor inside the part of the note you want to remove. Open the command palette, search for **Sectionals**, and choose an action.
 
+Movement commands carry the complete current topic and its nested subsections, along with the cursor.
+
 For a faster keyboard workflow, assign hotkeys under **Settings → Hotkeys**. If several structures contain the cursor, use **Delete current structure…** to choose how much to remove.
 
 ## Commands
@@ -23,6 +25,11 @@ For a faster keyboard workflow, assign hotkeys under **Settings → Hotkeys**. I
 | When you want to…                                       | Command                              |
 | ------------------------------------------------------- | ------------------------------------ |
 | Remove a topic and everything nested beneath it         | **Delete current section**           |
+| Move a section one position earlier among its siblings  | **Move current section up**          |
+| Move a section one position later among its siblings    | **Move current section down**        |
+| Move a section to the start of its sibling group        | **Move current section to start**    |
+| Move a section to the end of its sibling group          | **Move current section to end**      |
+| Run the last successful movement again at the cursor    | **Repeat last structural action**    |
 | Remove one heading block while keeping its subsections  | **Delete current heading block**     |
 | Clear a complete code or configuration example          | **Delete current fenced code block** |
 | Remove a reminder, warning, or aside                    | **Delete current callout**           |

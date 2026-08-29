@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add commands to move the current section within its sibling group and repeat the last movement.
+
 ## 0.1.2
 
 - Place production build artifacts in `dist/` so automated build verification can find `main.js`.
