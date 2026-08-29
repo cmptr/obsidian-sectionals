@@ -19,12 +19,21 @@ export function planSectionMovement(
   }
 
   const sections = collectMarkdownSections(parseMarkdownStructure(source));
-  const target = findMarkdownSection(source.length, sections, cursorOffset);
+  let target = findMarkdownSection(source.length, sections, cursorOffset);
   if (target === null) {
     return null;
   }
 
-  const siblings = findSiblingSections(sections, target);
+  let siblings = findSiblingSections(sections, target);
+  if (siblings.length === 1 && target.parent !== null) {
+    const parentHeading = target.parent;
+    const parent = sections.find((section) => section.heading === parentHeading);
+    if (parent !== undefined) {
+      target = parent;
+      siblings = findSiblingSections(sections, target);
+    }
+  }
+
   const sourceIndex = siblings.indexOf(target);
   let destinationIndex: number;
   switch (action.mode) {

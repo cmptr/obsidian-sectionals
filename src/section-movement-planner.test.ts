@@ -376,15 +376,16 @@ describe('planSectionMovement', () => {
   ].join('\n');
   const nestedCursorSource = [
     '# Root',
-    '## Parent',
-    '### One',
-    'One body',
-    '### Two',
-    'Two body',
-    '### Three',
-    'Three body',
-    '### Four',
-    'Four body',
+    '## Alpha',
+    'Alpha body',
+    '## Beta',
+    'Beta body',
+    '### Beta child',
+    'Child body',
+    '## Gamma',
+    'Gamma body',
+    '## Delta',
+    'Delta body',
     ''
   ].join('\n');
   const eofCursorSource = [
@@ -404,6 +405,7 @@ describe('planSectionMovement', () => {
     [
       {
         cursorOffset: cursorSource.indexOf('Gamma') + 2,
+        expectedOutput: null,
         mode: 'up',
         name: 'an upward move from inside a heading',
         source: cursorSource,
@@ -411,6 +413,7 @@ describe('planSectionMovement', () => {
       },
       {
         cursorOffset: cursorSource.indexOf('Beta body') + 'Beta '.length,
+        expectedOutput: null,
         mode: 'down',
         name: 'a downward move from inside body text',
         source: cursorSource,
@@ -418,20 +421,36 @@ describe('planSectionMovement', () => {
       },
       {
         cursorOffset: cursorSource.indexOf('Gamma body') + 'Gamma '.length,
+        expectedOutput: null,
         mode: 'start',
         name: 'a non-adjacent move to start',
         source: cursorSource,
         trackedText: 'body'
       },
       {
-        cursorOffset: nestedCursorSource.indexOf('Two body') + 'Two '.length,
+        cursorOffset: nestedCursorSource.indexOf('Child body') + 'Child '.length,
+        expectedOutput: [
+          '# Root',
+          '## Alpha',
+          'Alpha body',
+          '## Gamma',
+          'Gamma body',
+          '## Delta',
+          'Delta body',
+          '## Beta',
+          'Beta body',
+          '### Beta child',
+          'Child body',
+          ''
+        ].join('\n'),
         mode: 'end',
-        name: 'a nested descendant section moving non-adjacently to end',
+        name: 'a parent section moving from its descendant body',
         source: nestedCursorSource,
         trackedText: 'body'
       },
       {
         cursorOffset: eofCursorSource.length,
+        expectedOutput: null,
         mode: 'start',
         name: 'a true EOF boundary moving non-adjacently to start',
         source: eofCursorSource,
@@ -440,10 +459,13 @@ describe('planSectionMovement', () => {
     ] as const
   )(
     'maps the cursor-relative offset for $name',
-    ({ cursorOffset, mode, source, trackedText }) => {
+    ({ cursorOffset, expectedOutput, mode, source, trackedText }) => {
       const plan = requiredPlan(source, cursorOffset, mode);
       const updated = applyPlan(source, plan);
 
+      if (expectedOutput !== null) {
+        expect(updated).toBe(expectedOutput);
+      }
       if (cursorOffset === source.length) {
         expect(updated.slice(0, plan.cursorOffset)).toBe(
           '# Root\n## Delta\nDelta body\n'
