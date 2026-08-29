@@ -28,21 +28,53 @@ function requiredPlan(
 }
 
 describe('planSectionMovement', () => {
-  it('plans all four movement modes among same-level siblings', () => {
-    const source = '# Root\n## Alpha\na\n## Beta\nb\n## Gamma\ng\n# Keep\n';
-    const betaCursor = source.indexOf('\nb\n') + 1;
+  it('plans adjacent and non-adjacent movement among same-level siblings', () => {
+    const source = [
+      '# Root',
+      '## Alpha',
+      'a',
+      '## Beta',
+      'b',
+      '## Gamma',
+      'g',
+      '## Delta',
+      'd',
+      '## Epsilon',
+      'e',
+      '# Keep',
+      ''
+    ].join('\n');
+    const gammaCursor = source.indexOf('\ng\n') + 1;
+    const upPlan = requiredPlan(source, gammaCursor, 'up');
+    const downPlan = requiredPlan(source, gammaCursor, 'down');
+    const startPlan = requiredPlan(source, gammaCursor, 'start');
+    const endPlan = requiredPlan(source, gammaCursor, 'end');
 
-    expect(applyPlan(source, requiredPlan(source, betaCursor, 'up'))).toBe(
-      '# Root\n## Beta\nb\n## Alpha\na\n## Gamma\ng\n# Keep\n'
+    expect(applyPlan(source, upPlan)).toBe(
+      '# Root\n## Alpha\na\n## Gamma\ng\n## Beta\nb\n## Delta\nd\n## Epsilon\ne\n# Keep\n'
     );
-    expect(applyPlan(source, requiredPlan(source, betaCursor, 'down'))).toBe(
-      '# Root\n## Alpha\na\n## Gamma\ng\n## Beta\nb\n# Keep\n'
+    expect(applyPlan(source, downPlan)).toBe(
+      '# Root\n## Alpha\na\n## Beta\nb\n## Delta\nd\n## Gamma\ng\n## Epsilon\ne\n# Keep\n'
     );
-    expect(applyPlan(source, requiredPlan(source, betaCursor, 'start'))).toBe(
-      '# Root\n## Beta\nb\n## Alpha\na\n## Gamma\ng\n# Keep\n'
+    expect(startPlan.range).toEqual({
+      from: source.indexOf('## Alpha'),
+      to: source.indexOf('## Delta')
+    });
+    expect(startPlan.replacement).toBe(
+      '## Gamma\ng\n## Alpha\na\n## Beta\nb\n'
     );
-    expect(applyPlan(source, requiredPlan(source, betaCursor, 'end'))).toBe(
-      '# Root\n## Alpha\na\n## Gamma\ng\n## Beta\nb\n# Keep\n'
+    expect(applyPlan(source, startPlan)).toBe(
+      '# Root\n## Gamma\ng\n## Alpha\na\n## Beta\nb\n## Delta\nd\n## Epsilon\ne\n# Keep\n'
+    );
+    expect(endPlan.range).toEqual({
+      from: source.indexOf('## Gamma'),
+      to: source.indexOf('# Keep')
+    });
+    expect(endPlan.replacement).toBe(
+      '## Delta\nd\n## Epsilon\ne\n## Gamma\ng\n'
+    );
+    expect(applyPlan(source, endPlan)).toBe(
+      '# Root\n## Alpha\na\n## Beta\nb\n## Delta\nd\n## Epsilon\ne\n## Gamma\ng\n# Keep\n'
     );
   });
 
@@ -328,26 +360,112 @@ describe('planSectionMovement', () => {
     ).toBeNull();
   });
 
-  it('maps the cursor to the same character in the moved target', () => {
-    const source = [
-      '# Root',
-      '## Alpha',
-      'alpha',
-      '## Beta',
-      'Beta body',
-      '### Child',
-      'child',
-      ''
-    ].join('\n');
-    const originalCursor = source.indexOf('Beta body');
-    const plan = requiredPlan(source, originalCursor, 'up');
-    const updated = applyPlan(source, plan);
+  const cursorSource = [
+    '# Root',
+    '## Alpha',
+    'Alpha body',
+    '## Beta',
+    'Beta body',
+    '## Gamma',
+    'Gamma body',
+    '## Delta',
+    'Delta body',
+    '## Epsilon',
+    'Epsilon body',
+    ''
+  ].join('\n');
+  const nestedCursorSource = [
+    '# Root',
+    '## Parent',
+    '### One',
+    'One body',
+    '### Two',
+    'Two body',
+    '### Three',
+    'Three body',
+    '### Four',
+    'Four body',
+    ''
+  ].join('\n');
+  const eofCursorSource = [
+    '# Root',
+    '## Alpha',
+    'Alpha body',
+    '## Beta',
+    'Beta body',
+    '## Gamma',
+    'Gamma body',
+    '## Delta',
+    'Delta body',
+    ''
+  ].join('\n');
 
-    expect(updated[plan.cursorOffset]).toBe(source[originalCursor]);
-    expect(
-      updated.slice(plan.cursorOffset, plan.cursorOffset + 'Beta body'.length)
-    ).toBe('Beta body');
-  });
+  it.each(
+    [
+      {
+        cursorOffset: cursorSource.indexOf('Gamma') + 2,
+        mode: 'up',
+        name: 'an upward move from inside a heading',
+        source: cursorSource,
+        trackedText: 'mma'
+      },
+      {
+        cursorOffset: cursorSource.indexOf('Beta body') + 'Beta '.length,
+        mode: 'down',
+        name: 'a downward move from inside body text',
+        source: cursorSource,
+        trackedText: 'body'
+      },
+      {
+        cursorOffset: cursorSource.indexOf('Gamma body') + 'Gamma '.length,
+        mode: 'start',
+        name: 'a non-adjacent move to start',
+        source: cursorSource,
+        trackedText: 'body'
+      },
+      {
+        cursorOffset: nestedCursorSource.indexOf('Two body') + 'Two '.length,
+        mode: 'end',
+        name: 'a nested descendant section moving non-adjacently to end',
+        source: nestedCursorSource,
+        trackedText: 'body'
+      },
+      {
+        cursorOffset: eofCursorSource.length,
+        mode: 'start',
+        name: 'a true EOF boundary moving non-adjacently to start',
+        source: eofCursorSource,
+        trackedText: ''
+      }
+    ] as const
+  )(
+    'maps the cursor-relative offset for $name',
+    ({ cursorOffset, mode, source, trackedText }) => {
+      const plan = requiredPlan(source, cursorOffset, mode);
+      const updated = applyPlan(source, plan);
+
+      if (cursorOffset === source.length) {
+        expect(updated.slice(0, plan.cursorOffset)).toBe(
+          '# Root\n## Delta\nDelta body\n'
+        );
+        expect(updated.slice(plan.cursorOffset)).toBe([
+          '## Alpha',
+          'Alpha body',
+          '## Beta',
+          'Beta body',
+          '## Gamma',
+          'Gamma body',
+          ''
+        ].join('\n'));
+        return;
+      }
+
+      expect(updated[plan.cursorOffset]).toBe(source[cursorOffset]);
+      expect(
+        updated.slice(plan.cursorOffset, plan.cursorOffset + trackedText.length)
+      ).toBe(trackedText);
+    }
+  );
 
   it('returns the original action and rejects invalid cursor offsets', () => {
     const source = '# Alpha\na\n# Beta\nb\n';
