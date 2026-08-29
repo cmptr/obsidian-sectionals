@@ -1,12 +1,10 @@
-import type {
-  HeadingLevel,
-  MarkdownBlock,
-  MarkdownBlockKind,
-  MarkdownHeading,
-  MarkdownStructure
-} from './markdown-structure.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structure imports compact.
+import type { MarkdownBlock, MarkdownBlockKind, MarkdownHeading, MarkdownStructure } from './markdown-structure.ts';
+import type { MarkdownSection } from './section-query.ts';
 
 import { parseMarkdownStructure } from './markdown-structure.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible query imports compact.
+import { collectMarkdownSections, findMarkdownSection } from './section-query.ts';
 
 export type DeletionMode = 'heading-block' | 'section';
 
@@ -46,6 +44,7 @@ interface PlannedHeadingDeletion {
 
 interface PlanningContext {
   readonly cursorOffset: number;
+  readonly sections: readonly MarkdownSection[];
   readonly source: string;
   readonly structure: MarkdownStructure;
 }
@@ -135,38 +134,6 @@ export function planSectionDeletion(
   return context === null ? null : planHeadingDeletion(context, mode)?.range ?? null;
 }
 
-function computeLogicalEnds(
-  headings: readonly MarkdownHeading[]
-): ReadonlyMap<MarkdownHeading, number> {
-  const logicalEnds = new Map<MarkdownHeading, number>();
-  const nextStartsByContainer = new Map<string, Map<HeadingLevel, number>>();
-
-  for (let index = headings.length - 1; index >= 0; index -= 1) {
-    const heading = headings[index];
-    if (heading === undefined) {
-      continue;
-    }
-
-    let nextStartsByLevel = nextStartsByContainer.get(heading.container.id);
-    if (nextStartsByLevel === undefined) {
-      nextStartsByLevel = new Map<HeadingLevel, number>();
-      nextStartsByContainer.set(heading.container.id, nextStartsByLevel);
-    }
-
-    let logicalEnd = heading.container.end;
-    for (const [level, nextLineStart] of nextStartsByLevel) {
-      if (level <= heading.level && nextLineStart < logicalEnd) {
-        logicalEnd = nextLineStart;
-      }
-    }
-
-    logicalEnds.set(heading, logicalEnd);
-    nextStartsByLevel.set(heading.level, heading.lineStart);
-  }
-
-  return logicalEnds;
-}
-
 function containsCursor(
   sourceLength: number,
   start: number,
@@ -206,24 +173,24 @@ function createPlanningContext(
     return null;
   }
 
+  const structure = parseMarkdownStructure(source);
   return {
     cursorOffset,
+    sections: collectMarkdownSections(structure),
     source,
-    structure: parseMarkdownStructure(source)
+    structure
   };
 }
 
 function findBoundary(
   headings: readonly MarkdownHeading[],
-  target: MarkdownHeading,
-  mode: DeletionMode
+  target: MarkdownHeading
 ): MarkdownHeading | null {
   return (
     headings.find(
       (heading) =>
         heading.lineStart > target.lineStart
         && heading.container.id === target.container.id
-        && (mode === 'heading-block' || heading.level <= target.level)
     ) ?? null
   );
 }
@@ -259,33 +226,6 @@ function findContextualBlock(
       target = block;
     }
   }
-  return target;
-}
-
-function findTarget(
-  sourceLength: number,
-  headings: readonly MarkdownHeading[],
-  cursor: number
-): MarkdownHeading | null {
-  const logicalEnds = computeLogicalEnds(headings);
-  let target: MarkdownHeading | null = null;
-
-  for (const heading of headings) {
-    const logicalEnd = logicalEnds.get(heading) ?? heading.container.end;
-    if (!containsCursor(sourceLength, heading.lineStart, logicalEnd, cursor)) {
-      continue;
-    }
-
-    if (
-      target === null
-      || heading.container.depth > target.container.depth
-      || (heading.container.depth === target.container.depth
-        && heading.lineStart > target.lineStart)
-    ) {
-      target = heading;
-    }
-  }
-
   return target;
 }
 
@@ -417,17 +357,26 @@ function planHeadingDeletion(
   context: PlanningContext,
   mode: DeletionMode
 ): null | PlannedHeadingDeletion {
-  const { cursorOffset, source, structure } = context;
-  const heading = findTarget(source.length, structure.headings, cursorOffset);
-  if (heading === null) {
+  const { cursorOffset, sections, source, structure } = context;
+  const section = findMarkdownSection(
+    source.length,
+    sections,
+    cursorOffset
+  );
+  if (section === null) {
     return null;
   }
 
-  const boundary = findBoundary(structure.headings, heading, mode);
-  const range = {
-    from: heading.lineStart,
-    to: boundary?.lineStart ?? heading.container.end
-  };
+  const { heading } = section;
+  const boundary = mode === 'heading-block'
+    ? findBoundary(structure.headings, heading)
+    : null;
+  const range = mode === 'section'
+    ? section.range
+    : {
+      from: heading.lineStart,
+      to: boundary?.lineStart ?? heading.container.end
+    };
   if (
     range.from < 0
     || range.from >= range.to
