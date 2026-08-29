@@ -187,6 +187,12 @@ describe('createNumberedFilename', () => {
     expect(createNumberedFilename('Beta', 1)).toBe('Beta 1.md');
   });
 
+  it('accepts the maximum safe collision index without iterating to it', () => {
+    expect(createNumberedFilename('Beta', Number.MAX_SAFE_INTEGER)).toBe(
+      'Beta 9007199254740991.md'
+    );
+  });
+
   it.each([-1, 1.5, NaN, Infinity, 9_007_199_254_740_992])(
     'rejects the non-safe collision index %s',
     (collisionIndex) => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { SectionExtractionDraft } from './section-extraction-planner.ts';
 
+import { createExtractionWikilink } from './section-extraction-destination.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import { createExtractionSourceEdit, planSectionExtraction } from './section-extraction-planner.ts';
 
@@ -428,6 +429,71 @@ describe('createExtractionSourceEdit', () => {
   });
 
   it.each([
+    {
+      createdBasename: String.raw`A\B`,
+      displayTitle: String.raw`A\B`,
+      expectedWikilink: String.raw`[[A\\B]]`,
+      name: 'backslash',
+      shortestLinktext: String.raw`A\B`
+    },
+    {
+      createdBasename: 'A|B',
+      displayTitle: 'A|B',
+      expectedWikilink: String.raw`[[A\|B]]`,
+      name: 'pipe',
+      shortestLinktext: 'A|B'
+    },
+    {
+      createdBasename: 'A]B',
+      displayTitle: 'A]B',
+      expectedWikilink: String.raw`[[A\]B]]`,
+      name: 'closing bracket',
+      shortestLinktext: 'A]B'
+    },
+    {
+      createdBasename: 'A#B',
+      displayTitle: 'A#B',
+      expectedWikilink: String.raw`[[A\#B]]`,
+      name: 'hash',
+      shortestLinktext: 'A#B'
+    },
+    {
+      createdBasename: '^Block',
+      displayTitle: '^Block',
+      expectedWikilink: String.raw`[[\^Block]]`,
+      name: 'caret',
+      shortestLinktext: '^Block'
+    },
+    {
+      createdBasename: 'Beta',
+      displayTitle: String.raw`Title\|] # ^`,
+      expectedWikilink: String.raw`[[Notes/Beta|Title\\\|\] # ^]]`,
+      name: 'alias',
+      shortestLinktext: 'Notes/Beta'
+    }
+  ])('applies a generated wikilink containing $name bytes', ({
+    createdBasename,
+    displayTitle,
+    expectedWikilink,
+    shortestLinktext
+  }) => {
+    const source = '# Beta\nbody\n';
+    const draft = expectReady(source, source.indexOf('body'));
+    const wikilink = createExtractionWikilink(
+      shortestLinktext,
+      displayTitle,
+      createdBasename
+    );
+
+    expect(wikilink).toBe(expectedWikilink);
+    const edit = createExtractionSourceEdit(source.length, draft, wikilink);
+    const editedSource = source.slice(0, edit.range.from)
+      + edit.replacement
+      + source.slice(edit.range.to);
+    expect(editedSource).toBe(`# Beta\n\n${expectedWikilink}\n`);
+  });
+
+  it.each([
     '',
     'Beta',
     '[[]]',
@@ -435,7 +501,16 @@ describe('createExtractionSourceEdit', () => {
     '[[Beta]',
     '[[Beta]] trailing',
     '[[Beta\nTitle]]',
-    '[[Beta|]]'
+    '[[Beta|]]',
+    '[[Beta#Heading]]',
+    '[[^Block]]',
+    '[[Beta^Block]]',
+    String.raw`[[Beta\q]]`,
+    String.raw`[[Beta\[]]`,
+    String.raw`[[Beta|Alias\#Heading]]`,
+    String.raw`[[Beta|Alias\^Block]]`,
+    String.raw`[[Beta|Alias\q]]`,
+    '[[Beta|Alias|More]]'
   ])('throws TypeError for the malformed wikilink %j', (wikilink) => {
     const source = '# Beta\nbody\n';
     const draft = expectReady(source, source.indexOf('body'));

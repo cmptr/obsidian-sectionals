@@ -44,16 +44,7 @@ export function createExtractionSourceEdit(
   draft: SectionExtractionDraft,
   wikilink: string
 ): ExtractionSourceEdit {
-  // eslint-disable-next-line no-useless-escape -- Escaped brackets keep wikilink delimiters explicit.
-  const wikilinkMatch = /^\[\[(?<target>[^\[\]\r\n|]+)(?:\|(?<alias>[^\[\]\r\n|]+))?\]\]$/u
-    .exec(wikilink);
-  const target = wikilinkMatch?.groups?.['target'];
-  const alias = wikilinkMatch?.groups?.['alias'];
-  if (
-    target === undefined
-    || target.trim() === ''
-    || alias?.trim() === ''
-  ) {
+  if (!isCanonicalExtractionWikilink(wikilink)) {
     throw new TypeError('Wikilink must contain a non-empty target.');
   }
 
@@ -209,4 +200,58 @@ function getOwnedLineEndingLength(
   return source.startsWith(lineEnding, headingSyntaxEnd)
     ? lineEnding.length
     : 1;
+}
+
+function isAllowedWikilinkEscape(
+  escapedCharacter: string | undefined,
+  isAlias: boolean
+): boolean {
+  return escapedCharacter === '\\'
+    || escapedCharacter === '|'
+    || escapedCharacter === ']'
+    || (!isAlias && (escapedCharacter === '#' || escapedCharacter === '^'));
+}
+
+function isCanonicalExtractionWikilink(wikilink: string): boolean {
+  const openingDelimiter = '[[';
+  const closingDelimiter = ']]';
+  if (
+    !wikilink.startsWith(openingDelimiter)
+    || !wikilink.endsWith(closingDelimiter)
+  ) {
+    return false;
+  }
+
+  const payload = wikilink.slice(
+    openingDelimiter.length,
+    -closingDelimiter.length
+  );
+  let componentFrom = 0;
+  let isAlias = false;
+  for (let index = 0; index < payload.length; index += 1) {
+    const character = payload[index];
+    if (character === '\\') {
+      const escapedCharacter = payload[index + 1];
+      if (!isAllowedWikilinkEscape(escapedCharacter, isAlias)) {
+        return false;
+      }
+      index += 1;
+    } else if (character === '|') {
+      if (isAlias || payload.slice(componentFrom, index).trim() === '') {
+        return false;
+      }
+      isAlias = true;
+      componentFrom = index + 1;
+    } else if (
+      character === '['
+      || character === ']'
+      || character === '\r'
+      || character === '\n'
+      || (!isAlias && (character === '#' || character === '^'))
+    ) {
+      return false;
+    }
+  }
+
+  return payload.slice(componentFrom).trim() !== '';
 }

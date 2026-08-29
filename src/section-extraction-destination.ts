@@ -51,14 +51,14 @@ export function createExtractionWikilink(
     throw new TypeError('Wikilink target and display title must be non-empty.');
   }
 
-  const target = escapeWikilinkComponent(shortestLinktext);
+  const target = escapeWikilinkTarget(shortestLinktext);
   if (
     shortestLinktext === displayTitle
     && createdBasename === displayTitle
   ) {
     return `[[${target}]]`;
   }
-  return `[[${target}|${escapeWikilinkComponent(displayTitle)}]]`;
+  return `[[${target}|${escapeWikilinkAlias(displayTitle)}]]`;
 }
 
 export function prepareExtractionDestination(
@@ -152,13 +152,21 @@ function encodeMarkdownPathSegment(segment: string): string {
   );
 }
 
-function escapeWikilinkComponent(value: string): string {
+function escapeWikilinkAlias(value: string): string {
   const escapedBackslashes = value.replaceAll('\\', '\\\\');
   return escapedBackslashes
     // eslint-disable-next-line unicorn/prefer-string-raw -- Escaping the delimiter requires a literal backslash prefix.
     .replaceAll('|', '\\|')
     // eslint-disable-next-line unicorn/prefer-string-raw -- Escaping the delimiter requires a literal backslash prefix.
     .replaceAll(']', '\\]');
+}
+
+function escapeWikilinkTarget(value: string): string {
+  return escapeWikilinkAlias(value)
+    // eslint-disable-next-line unicorn/prefer-string-raw -- Escaping the marker requires a literal backslash prefix.
+    .replaceAll('#', '\\#')
+    // eslint-disable-next-line unicorn/prefer-string-raw -- Escaping the marker requires a literal backslash prefix.
+    .replaceAll('^', '\\^');
 }
 
 function getParentPath(path: string): string {

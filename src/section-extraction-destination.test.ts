@@ -152,6 +152,19 @@ describe('prepareExtractionDestination paths', () => {
     });
   });
 
+  it('rejects a returned parent path that escapes above the vault root', () => {
+    const fileExists = vi.fn(() => false);
+
+    expect(() =>
+      prepareExtractionDestination(createDraft(), 'Alpha.md', {
+        fileExists,
+        getNewFileParent: vi.fn(() => ({ path: '../Outside' })),
+        resolveLink: vi.fn()
+      })
+    ).toThrow(TypeError);
+    expect(fileExists).not.toHaveBeenCalled();
+  });
+
   it.each(['../Escape', String.raw`..\Escape`])(
     'rejects a forged filename stem containing path separators: %s',
     (filenameStem) => {
@@ -239,6 +252,32 @@ describe('createExtractionWikilink', () => {
         String.raw`A|B]\C`
       )
     ).toBe(String.raw`[[Notes/A\|B\]\\C|A\|B\]\\C]]`);
+  });
+
+  it.each([
+    {
+      expected: String.raw`[[\^Block]]`,
+      target: '^Block'
+    },
+    {
+      expected: String.raw`[[Folder\#Note]]`,
+      target: 'Folder#Note'
+    },
+    {
+      expected: String.raw`[[Folder\#\^Block]]`,
+      target: 'Folder#^Block'
+    }
+  ])('escapes structural subpath markers in target $target', ({
+    expected,
+    target
+  }) => {
+    expect(createExtractionWikilink(target, target, target)).toBe(expected);
+  });
+
+  it('escapes subpath markers only in the target and not the alias', () => {
+    expect(
+      createExtractionWikilink('Folder#^Name', 'Title # ^', 'Name')
+    ).toBe(String.raw`[[Folder\#\^Name|Title # ^]]`);
   });
 
   it.each([
@@ -378,6 +417,85 @@ describe('prepareExtractionDestination Markdown targets', () => {
         ''
       ].join('\n')
     });
+  });
+
+  it('encodes a literal percent escape prefix rather than preserving pre-encoding', () => {
+    const draft = createDraftFromSource('# Beta\n[Plan](Plan.md)\n');
+
+    expect(
+      prepareExtractionDestination(draft, 'Alpha.md', {
+        fileExists: vi.fn(() => false),
+        getNewFileParent: vi.fn(() => ({ path: 'Notes' })),
+        resolveLink: vi.fn(() => ({
+          extension: 'md',
+          path: 'Notes/Plan%20Draft.md'
+        }))
+      })
+    ).toMatchObject({
+      content: '# Beta\n\n[Plan](Plan%2520Draft.md)\n'
+    });
+  });
+
+  it.each([
+    {
+      expectedTarget: '../../Target.md',
+      name: 'source root to nested destination',
+      parentPath: 'Notes/Extracted',
+      resolvedPath: 'Target.md',
+      sourcePath: 'Alpha.md'
+    },
+    {
+      expectedTarget: 'Projects/Target.md',
+      name: 'nested source to destination root',
+      parentPath: '',
+      resolvedPath: 'Projects/Target.md',
+      sourcePath: 'Projects/Alpha.md'
+    }
+  ])('rewrites from $name', ({
+    expectedTarget,
+    parentPath,
+    resolvedPath,
+    sourcePath
+  }) => {
+    const draft = createDraftFromSource('# Beta\n[Target](Target.md)\n');
+    const getNewFileParent = vi.fn(() => ({ path: parentPath }));
+    const resolveLink = vi.fn(() => ({
+      extension: 'md',
+      path: resolvedPath
+    }));
+
+    expect(
+      prepareExtractionDestination(draft, sourcePath, {
+        fileExists: vi.fn(() => false),
+        getNewFileParent,
+        resolveLink
+      })
+    ).toMatchObject({
+      content: `# Beta\n\n[Target](${expectedTarget})\n`
+    });
+    expect(getNewFileParent).toHaveBeenCalledExactlyOnceWith(
+      sourcePath,
+      'Beta.md'
+    );
+    expect(resolveLink).toHaveBeenCalledExactlyOnceWith(
+      'Target.md',
+      sourcePath
+    );
+  });
+
+  it('rejects a resolved target path that escapes above the vault root', () => {
+    const draft = createDraftFromSource('# Beta\n[Target](Target.md)\n');
+
+    expect(() =>
+      prepareExtractionDestination(draft, 'Alpha.md', {
+        fileExists: vi.fn(() => false),
+        getNewFileParent: vi.fn(() => ({ path: 'Notes' })),
+        resolveLink: vi.fn(() => ({
+          extension: 'md',
+          path: '../Outside.md'
+        }))
+      })
+    ).toThrow(TypeError);
   });
 
   it('leaves external and same-note targets unchanged and does not resolve them', () => {
