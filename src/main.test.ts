@@ -1332,7 +1332,7 @@ describe('SectionalsPlugin', () => {
 
     expect(harness.fixture.replaceRange).toHaveBeenCalledOnce();
     expect(harness.fixture.editor.getValue()).toBe(
-      '# Extract me\n\n[[Extract me]]\n'
+      '[[Extract me]]\n'
     );
     expect(harness.fixture.setCursor).toHaveBeenCalledOnce();
     expect(harness.notify).not.toHaveBeenCalled();
@@ -1348,7 +1348,7 @@ describe('SectionalsPlugin', () => {
 
     expect(harness.fixture.replaceRange).toHaveBeenCalledOnce();
     expect(harness.fixture.editor.getValue()).toBe(
-      '# Extract me\n\n[[Extract me]]\n'
+      '[[Extract me]]\n'
     );
     expect(harness.fixture.setCursor).toHaveBeenCalledOnce();
     expect(harness.notify).not.toHaveBeenCalled();

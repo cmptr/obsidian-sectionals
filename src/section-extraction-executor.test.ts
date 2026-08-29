@@ -262,13 +262,13 @@ describe('executeSectionExtraction success', () => {
     expect(runtime.files.get('Extracted/Beta.md')?.content).toBe(
       '# Beta\n\nbody\n'
     );
-    expect(editor.currentSource()).toBe('# Beta\n\n[[Beta]]\n');
+    expect(editor.currentSource()).toBe('[[Beta]]\n');
     expect(editor.replaceRange).toHaveBeenCalledExactlyOnceWith(
-      '\n\n[[Beta]]\n',
-      { ch: 6, line: 0 },
+      '[[Beta]]\n',
+      { ch: 0, line: 0 },
       { ch: 0, line: 2 }
     );
-    expect(editor.setCursor).toHaveBeenCalledExactlyOnceWith({ ch: 0, line: 2 });
+    expect(editor.setCursor).toHaveBeenCalledExactlyOnceWith({ ch: 0, line: 0 });
     expect(events).toEqual([
       'getValue',
       'getCursor',
@@ -282,12 +282,12 @@ describe('executeSectionExtraction success', () => {
       'read:Extracted/Beta.md:1',
       'getValue',
       'getLinktext:Extracted/Beta.md:Projects/Source.md',
-      'offsetToPos:6',
+      'offsetToPos:0',
       'offsetToPos:12',
       'getValue',
       'replaceRange',
       'getValue',
-      'offsetToPos:8',
+      'offsetToPos:0',
       'setCursor'
     ]);
     expect(runtime.delete).not.toHaveBeenCalled();
@@ -467,9 +467,7 @@ describe('executeSectionExtraction final commit gate', () => {
     ).resolves.toBe(true);
 
     expect(runtime.getLinktext).toHaveBeenCalledTimes(2);
-    expect(editor.currentSource()).toBe(
-      '# Beta\n\n[[Extracted/Beta|Beta]]\n'
-    );
+    expect(editor.currentSource()).toBe('[[Extracted/Beta|Beta]]\n');
     expect(notices).toEqual([]);
   });
 
@@ -555,7 +553,7 @@ describe('executeSectionExtraction collision races', () => {
       }),
       'Projects/Source.md'
     );
-    expect(editor.currentSource()).toBe('# Beta\n\n[[Beta 1|Beta]]\n');
+    expect(editor.currentSource()).toBe('[[Beta 1|Beta]]\n');
     expect(runtime.files.get('Extracted/Beta.md')?.content).toBe(
       'won by another writer'
     );
@@ -937,7 +935,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
   it('retains the destination when replaceRange returns after a partial mutation', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     editor.replaceRange.mockImplementationOnce(() => {
-      editor.overwriteSource('# Beta\n\n[[Bet');
+      editor.overwriteSource('[[Bet');
     });
     const runtime = new StatefulRuntime();
     const { notices, notify } = createNotify();
@@ -993,7 +991,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       executeSectionExtraction(editor, 'Source.md', runtime, notify)
     ).resolves.toBe(true);
 
-    expect(editor.currentSource()).toBe('# Beta\n\n[[Beta]]\n');
+    expect(editor.currentSource()).toBe('[[Beta]]\n');
     expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
     expect(runtime.delete).not.toHaveBeenCalled();
@@ -1003,7 +1001,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
   it('retains the destination and reports an indeterminate partial mutation', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     editor.replaceRange.mockImplementationOnce(() => {
-      editor.overwriteSource('# Beta\n\n[[Bet');
+      editor.overwriteSource('[[Bet');
       throw new Error('partial edit');
     });
     const runtime = new StatefulRuntime();
@@ -1013,7 +1011,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       executeSectionExtraction(editor, 'Source.md', runtime, notify)
     ).resolves.toBe(true);
 
-    expect(editor.currentSource()).toBe('# Beta\n\n[[Bet');
+    expect(editor.currentSource()).toBe('[[Bet');
     expect(notices).toEqual([{
       kind: 'indeterminate-source-mutation',
       path: 'Extracted/Beta.md'
@@ -1064,7 +1062,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       executeSectionExtraction(editor, 'Source.md', runtime, notify)
     ).resolves.toBe(true);
 
-    expect(editor.currentSource()).toBe('# Beta\n\n[[Beta]]\n');
+    expect(editor.currentSource()).toBe('[[Beta]]\n');
     expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
     expect(runtime.delete).not.toHaveBeenCalled();

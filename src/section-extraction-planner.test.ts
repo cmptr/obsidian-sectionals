@@ -1,7 +1,8 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 
-import type { SectionExtractionDraft } from './section-extraction-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner types compact.
+import type { ExtractionSourceEdit, SectionExtractionDraft } from './section-extraction-planner.ts';
 
 import { createExtractionWikilink } from './section-extraction-destination.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
@@ -53,10 +54,6 @@ describe('planSectionExtraction availability', () => {
       const draft = expectReady(source, source.indexOf('body'));
 
       expect(draft.sectionRange).toEqual({ from: 0, to: source.length });
-      expect(draft.sourceBodyRange).toEqual({
-        from: source.indexOf('\n'),
-        to: source.length
-      });
     }
   );
 
@@ -68,10 +65,6 @@ describe('planSectionExtraction availability', () => {
     const draft = expectReady(source, source.indexOf('body'));
 
     expect(draft.sectionRange).toEqual({ from: 0, to: source.length });
-    expect(draft.sourceBodyRange).toEqual({
-      from: source.lastIndexOf('\n', source.indexOf('body') - 1),
-      to: source.length
-    });
   });
 
   it('is ready when only direct body content is meaningful', () => {
@@ -82,10 +75,6 @@ describe('planSectionExtraction availability', () => {
       from: 0,
       to: source.indexOf('# Next')
     });
-    expect(draft.sourceBodyRange).toEqual({
-      from: source.indexOf('\n'),
-      to: source.indexOf('# Next')
-    });
   });
 
   it('is ready when only descendant headings make up the body', () => {
@@ -93,10 +82,6 @@ describe('planSectionExtraction availability', () => {
     const draft = expectReady(source, source.indexOf('Parent'));
 
     expect(draft.sectionRange).toEqual({ from: 0, to: source.length });
-    expect(draft.sourceBodyRange).toEqual({
-      from: source.indexOf('\n'),
-      to: source.length
-    });
   });
 
   it('accepts a cursor at true EOF in the final non-empty section', () => {
@@ -104,10 +89,6 @@ describe('planSectionExtraction availability', () => {
     const draft = expectReady(source, source.length);
 
     expect(draft.sectionRange).toEqual({ from: 0, to: source.length });
-    expect(draft.sourceBodyRange).toEqual({
-      from: source.indexOf('\n'),
-      to: source.length
-    });
   });
 });
 
@@ -355,63 +336,90 @@ describe('planSectionExtraction dependencies', () => {
     });
   });
 
+  it('allows a heading reference whose definition moves with the section', () => {
+    const referenceInside = [
+      '# [Project][shared]',
+      'body',
+      '',
+      '[shared]: ../Plans/Plan.md#Scope',
+      '# Keep',
+      'kept',
+      ''
+    ].join('\n');
+    const referenceDraft = expectReady(
+      referenceInside,
+      referenceInside.indexOf('body')
+    );
+
+    expect(referenceDraft.destinationContent).toContain('# [Project][shared]');
+    expect(referenceDraft.relativeTargets).toEqual([
+      expect.objectContaining({
+        kind: 'reference-definition',
+        linkpath: '../Plans/Plan.md',
+        subpath: '#Scope'
+      })
+    ]);
+  });
+
+  it('allows a heading footnote whose definition moves with the section', () => {
+    const footnoteInside = [
+      '# Project[^note]',
+      'body',
+      '',
+      '[^note]: detail',
+      '# Keep',
+      'kept',
+      ''
+    ].join('\n');
+
+    expect(
+      planSectionExtraction(
+        footnoteInside,
+        footnoteInside.indexOf('body')
+      ).kind
+    ).toBe('ready');
+  });
+
+  it('allows a heading reference image whose definition moves with the section', () => {
+    const referenceImageInside = [
+      '# ![Project map][shared]',
+      'body',
+      '',
+      '[shared]: image.png',
+      '# Keep',
+      'kept',
+      ''
+    ].join('\n');
+
+    expect(
+      planSectionExtraction(
+        referenceImageInside,
+        referenceImageInside.indexOf('body')
+      ).kind
+    ).toBe('ready');
+  });
+
   it.each([
     {
       definition: '[shared]: note.md',
       heading: '[Project][shared]',
-      name: 'reference link with its definition in the removed body',
-      placement: 'inside'
-    },
-    {
-      definition: '[shared]: note.md',
-      heading: '[Project][shared]',
-      name: 'reference link with its definition outside the section',
-      placement: 'outside'
+      name: 'reference link'
     },
     {
       definition: '[^shared]: detail',
       heading: 'Project[^shared]',
-      name: 'footnote with its definition in the removed body',
-      placement: 'inside'
-    },
-    {
-      definition: '[^shared]: detail',
-      heading: 'Project[^shared]',
-      name: 'footnote with its definition outside the section',
-      placement: 'outside'
+      name: 'footnote'
     },
     {
       definition: '[shared]: image.png',
       heading: '![Project map][shared]',
-      name: 'reference image',
-      placement: 'inside'
-    },
-    {
-      definition: '[Project map]: image.png',
-      heading: '![Project map][]',
-      name: 'collapsed reference image',
-      placement: 'outside'
-    },
-    {
-      definition: '[Project map]: image.png',
-      heading: '![Project map]',
-      name: 'shortcut reference image',
-      placement: 'inside'
-    },
-    {
-      definition: '[shared]: note.md',
-      heading: '[Project][SHARED]',
-      name: 'case-normalized reference link',
-      placement: 'outside'
+      name: 'reference image'
     }
-  ])('rejects a duplicated heading containing a definition-backed $name', ({
+  ])('rejects a heading $name whose definition stays under Keep', ({
     definition,
-    heading,
-    placement
+    heading
   }) => {
-    const source = placement === 'inside'
-      ? `# ${heading}\nbody\n\n${definition}\n# Keep\nkept\n`
-      : `# ${heading}\nbody\n# Keep\n${definition}\n`;
+    const source = `# ${heading}\nbody\n# Keep\n${definition}\n`;
 
     expect(planSectionExtraction(source, source.indexOf('body'))).toEqual({
       kind: 'invalid',
@@ -419,7 +427,24 @@ describe('planSectionExtraction dependencies', () => {
     });
   });
 
-  it('allows an inline Markdown link in the duplicated heading and collects its logical target', () => {
+  it('rejects an inside definition used again under Keep', () => {
+    const source = [
+      '# [Project][shared]',
+      'body',
+      '',
+      '[shared]: note.md',
+      '# Keep',
+      '[again][shared]',
+      ''
+    ].join('\n');
+
+    expect(planSectionExtraction(source, source.indexOf('body'))).toEqual({
+      kind: 'invalid',
+      reason: 'cross-boundary-reference'
+    });
+  });
+
+  it('allows an inline Markdown link in the target heading and collects its logical target', () => {
     const source = '# [Project](../Plans/Plan.md#Scope)\nbody\n';
     const draft = expectReady(source, source.indexOf('body'));
     const destination = '../Plans/Plan.md#Scope';
@@ -438,75 +463,153 @@ describe('planSectionExtraction dependencies', () => {
 });
 
 describe('createExtractionSourceEdit', () => {
-  it('replaces an EOF body with one canonical wikilink paragraph', () => {
+  it('replaces complete LF sections in linked and open modes', () => {
+    const beforeFollowing = '## Beta\nbody\n### Child\nchild\n## Gamma\ngamma\n';
+    const beforeFollowingDraft = expectReady(
+      beforeFollowing,
+      beforeFollowing.indexOf('body')
+    );
+    const linkedBeforeFollowing = createExtractionSourceEdit(
+      beforeFollowing,
+      beforeFollowingDraft,
+      { mode: 'linked', wikilink: '[[Beta]]' }
+    );
+    expect(linkedBeforeFollowing).toEqual({
+      cursorOffset: 0,
+      mode: 'linked',
+      range: {
+        from: 0,
+        to: beforeFollowing.indexOf('## Gamma')
+      },
+      replacement: '[[Beta]]\n\n'
+    });
+    expect(applySourceEdit(beforeFollowing, linkedBeforeFollowing)).toBe(
+      '[[Beta]]\n\n## Gamma\ngamma\n'
+    );
+
+    const nestedAtEof = '# Parent\nintro\n## Beta\nbody\n';
+    const nestedDraft = expectReady(nestedAtEof, nestedAtEof.indexOf('body'));
+    const linkedAtEof = createExtractionSourceEdit(
+      nestedAtEof,
+      nestedDraft,
+      { mode: 'linked', wikilink: '[[Beta]]' }
+    );
+    expect(linkedAtEof.replacement).toBe('\n[[Beta]]\n');
+    expect(linkedAtEof.mode).toBe('linked');
+    if (linkedAtEof.mode !== 'linked') {
+      throw new Error('Expected a linked source edit.');
+    }
+    expect(linkedAtEof.cursorOffset).toBe(nestedDraft.sectionRange.from + 1);
+    expect(applySourceEdit(nestedAtEof, linkedAtEof)).toBe(
+      '# Parent\nintro\n\n[[Beta]]\n'
+    );
+
+    const nestedBeforeFollowing = '# Parent\nintro\n## Beta\nbody\n## Gamma\ngamma\n';
+    const nestedBeforeFollowingDraft = expectReady(
+      nestedBeforeFollowing,
+      nestedBeforeFollowing.indexOf('body')
+    );
+    const nestedLinkedEdit = createExtractionSourceEdit(
+      nestedBeforeFollowing,
+      nestedBeforeFollowingDraft,
+      { mode: 'linked', wikilink: '[[Beta]]' }
+    );
+    expect(nestedLinkedEdit.replacement).toBe('\n[[Beta]]\n\n');
+    expect(applySourceEdit(nestedBeforeFollowing, nestedLinkedEdit)).toBe(
+      '# Parent\nintro\n\n[[Beta]]\n\n## Gamma\ngamma\n'
+    );
+    const nestedOpenEdit = createExtractionSourceEdit(
+      nestedBeforeFollowing,
+      nestedBeforeFollowingDraft,
+      { mode: 'open' }
+    );
+    expect(applySourceEdit(nestedBeforeFollowing, nestedOpenEdit)).toBe(
+      '# Parent\nintro\n## Gamma\ngamma\n'
+    );
+
+    const openEdit = createExtractionSourceEdit(
+      beforeFollowing,
+      beforeFollowingDraft,
+      { mode: 'open' }
+    );
+    expect(openEdit).toEqual({
+      mode: 'open',
+      range: beforeFollowingDraft.sectionRange,
+      replacement: ''
+    });
+    expect(applySourceEdit(beforeFollowing, openEdit)).toBe(
+      '## Gamma\ngamma\n'
+    );
+  });
+
+  it.each(['\n\n', '\n \t\n'])(
+    'does not generate a leading separator after the existing blank %j',
+    (blank) => {
+      const source = `# Parent\nintro${blank}## Beta\nbody\n`;
+      const draft = expectReady(source, source.indexOf('body'));
+      const edit = createExtractionSourceEdit(source, draft, {
+        mode: 'linked',
+        wikilink: '[[Beta]]'
+      });
+
+      expect(edit.replacement).toBe('[[Beta]]\n');
+      expect(edit.mode).toBe('linked');
+      if (edit.mode !== 'linked') {
+        throw new Error('Expected a linked source edit.');
+      }
+      expect(edit.cursorOffset).toBe(draft.sectionRange.from);
+      expect(applySourceEdit(source, edit)).toBe(
+        `# Parent\nintro${blank}[[Beta]]\n`
+      );
+    }
+  );
+
+  it('uses CRLF paragraph ownership at EOF and before following content', () => {
+    const nestedAtEof = '# Parent\r\nintro\r\n## Beta\r\nbody\r\n';
+    const nestedDraft = expectReady(nestedAtEof, nestedAtEof.indexOf('body'));
+    const linkedAtEof = createExtractionSourceEdit(
+      nestedAtEof,
+      nestedDraft,
+      { mode: 'linked', wikilink: '[[Beta]]' }
+    );
+    expect(linkedAtEof.replacement).toBe('\r\n[[Beta]]\r\n');
+    expect(linkedAtEof.mode).toBe('linked');
+    if (linkedAtEof.mode !== 'linked') {
+      throw new Error('Expected a linked source edit.');
+    }
+    expect(linkedAtEof.cursorOffset).toBe(nestedDraft.sectionRange.from + 2);
+    expect(applySourceEdit(nestedAtEof, linkedAtEof)).toBe(
+      '# Parent\r\nintro\r\n\r\n[[Beta]]\r\n'
+    );
+
+    const beforeFollowing = '## Beta\r\nbody\r\n## Gamma\r\ngamma\r\n';
+    const beforeFollowingDraft = expectReady(
+      beforeFollowing,
+      beforeFollowing.indexOf('body')
+    );
+    const linkedBeforeFollowing = createExtractionSourceEdit(
+      beforeFollowing,
+      beforeFollowingDraft,
+      { mode: 'linked', wikilink: '[[Beta]]' }
+    );
+    expect(linkedBeforeFollowing.replacement).toBe('[[Beta]]\r\n\r\n');
+    expect(linkedBeforeFollowing.mode).toBe('linked');
+    if (linkedBeforeFollowing.mode !== 'linked') {
+      throw new Error('Expected a linked source edit.');
+    }
+    expect(linkedBeforeFollowing.cursorOffset).toBe(0);
+    expect(applySourceEdit(beforeFollowing, linkedBeforeFollowing)).toBe(
+      '[[Beta]]\r\n\r\n## Gamma\r\ngamma\r\n'
+    );
+  });
+
+  it('removes the complete note in open mode without exposing a cursor offset', () => {
     const source = '# Beta\nbody\n';
     const draft = expectReady(source, source.indexOf('body'));
+    const edit = createExtractionSourceEdit(source, draft, { mode: 'open' });
 
-    expect(createExtractionSourceEdit(source.length, draft, '[[Beta]]')).toEqual(
-      {
-        cursorOffset: draft.sourceBodyRange.from + 2,
-        range: draft.sourceBodyRange,
-        replacement: '\n\n[[Beta]]\n'
-      }
-    );
-  });
-
-  it('leaves one blank line after the wikilink before a following section', () => {
-    const source = '# Beta\nbody\n# Next\nnext body\n';
-    const draft = expectReady(source, source.indexOf('body'));
-
-    expect(createExtractionSourceEdit(source.length, draft, '[[Beta]]')).toEqual(
-      {
-        cursorOffset: draft.sourceBodyRange.from + 2,
-        range: draft.sourceBodyRange,
-        replacement: '\n\n[[Beta]]\n\n'
-      }
-    );
-  });
-
-  it('uses the draft CRLF and points the cursor at the first opening bracket', () => {
-    const source = '## Beta\r\nbody\r\n';
-    const draft = expectReady(source, source.indexOf('body'));
-    const edit = createExtractionSourceEdit(
-      source.length,
-      draft,
-      '[[Folder/Beta|Beta]]'
-    );
-
-    expect(edit).toEqual({
-      cursorOffset: draft.sourceBodyRange.from + 4,
-      range: draft.sourceBodyRange,
-      replacement: '\r\n\r\n[[Folder/Beta|Beta]]\r\n'
-    });
-    expect(edit.replacement[edit.cursorOffset - edit.range.from]).toBe('[');
-  });
-
-  it('splices an EOF CRLF source without duplicating the retained heading carriage return', () => {
-    const source = '## Beta\r\nbody\r\n';
-    const draft = expectReady(source, source.indexOf('body'));
-    const edit = createExtractionSourceEdit(source.length, draft, '[[Beta]]');
-    const editedSource = source.slice(0, edit.range.from)
-      + edit.replacement
-      + source.slice(edit.range.to);
-
-    expect(draft.sourceBodyRange.from).toBe(source.indexOf('\r\n'));
-    expect(editedSource).toBe('## Beta\r\n\r\n[[Beta]]\r\n');
-    expect(editedSource).not.toContain('\r\r\n');
-  });
-
-  it('splices CRLF before following content without corrupting either boundary', () => {
-    const source = '## Beta\r\nbody\r\n# Next\r\nnext body\r\n';
-    const draft = expectReady(source, source.indexOf('body'));
-    const edit = createExtractionSourceEdit(source.length, draft, '[[Beta]]');
-    const editedSource = source.slice(0, edit.range.from)
-      + edit.replacement
-      + source.slice(edit.range.to);
-
-    expect(draft.sourceBodyRange.from).toBe(source.indexOf('\r\n'));
-    expect(editedSource).toBe(
-      '## Beta\r\n\r\n[[Beta]]\r\n\r\n# Next\r\nnext body\r\n'
-    );
-    expect(editedSource).not.toContain('\r\r\n');
+    expect(applySourceEdit(source, edit)).toBe('');
+    expect(edit).not.toHaveProperty('cursorOffset');
   });
 
   it.each([
@@ -609,11 +712,11 @@ describe('createExtractionSourceEdit', () => {
     );
 
     expect(wikilink).toBe(expectedWikilink);
-    const edit = createExtractionSourceEdit(source.length, draft, wikilink);
-    const editedSource = source.slice(0, edit.range.from)
-      + edit.replacement
-      + source.slice(edit.range.to);
-    expect(editedSource).toBe(`# Beta\n\n${expectedWikilink}\n`);
+    const edit = createExtractionSourceEdit(source, draft, {
+      mode: 'linked',
+      wikilink
+    });
+    expect(applySourceEdit(source, edit)).toBe(`${expectedWikilink}\n`);
   });
 
   it.each([
@@ -642,7 +745,26 @@ describe('createExtractionSourceEdit', () => {
     const source = '# Beta\nbody\n';
     const draft = expectReady(source, source.indexOf('body'));
 
-    expect(() => createExtractionSourceEdit(source.length, draft, wikilink))
-      .toThrow(TypeError);
+    expect(() => createExtractionSourceEdit(source, draft, { mode: 'linked', wikilink })).toThrow(TypeError);
+  });
+
+  it('does not validate a wikilink in open mode', () => {
+    const source = '# Beta\nbody\n';
+    const draft = expectReady(source, source.indexOf('body'));
+
+    expect(createExtractionSourceEdit(source, draft, { mode: 'open' })).toEqual({
+      mode: 'open',
+      range: draft.sectionRange,
+      replacement: ''
+    });
   });
 });
+
+function applySourceEdit(
+  source: string,
+  edit: ExtractionSourceEdit
+): string {
+  return source.slice(0, edit.range.from)
+    + edit.replacement
+    + source.slice(edit.range.to);
+}

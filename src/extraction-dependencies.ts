@@ -86,10 +86,9 @@ const REFERENCE_WHITESPACE = /[\t\n\r ]+/gu;
 export function analyzeExtractionDependencies(
   source: string,
   extractedRange: MarkdownRange,
-  destinationContent: string,
-  duplicatedRange?: MarkdownRange
+  destinationContent: string
 ): DependencyAnalysis {
-  if (hasCrossBoundaryReference(source, extractedRange, duplicatedRange)) {
+  if (hasCrossBoundaryReference(source, extractedRange)) {
     return { kind: 'invalid', reason: 'cross-boundary-reference' };
   }
 
@@ -594,8 +593,7 @@ function getTargetKind(parentName: string | undefined): MarkdownTargetKind | nul
 
 function hasCrossBoundaryReference(
   source: string,
-  extractedRange: MarkdownRange,
-  duplicatedRange?: MarkdownRange
+  extractedRange: MarkdownRange
 ): boolean {
   const parsed = parseMarkdown(source);
   const labels = collectReferenceOccurrences(source, parsed);
@@ -605,13 +603,6 @@ function hasCrossBoundaryReference(
     if (occurrences.definitions.length === 0) {
       continue;
     }
-    if (
-      duplicatedRange !== undefined
-      && occurrences.uses.some((range) => getBoundarySide(range, duplicatedRange) !== 'outside')
-    ) {
-      return true;
-    }
-
     const sides = [...occurrences.definitions, ...occurrences.uses].map(
       (range) => getBoundarySide(range, extractedRange)
     );

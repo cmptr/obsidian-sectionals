@@ -101,6 +101,15 @@ type ReadyDestinationPreparation = Extract<
   DestinationReadyDiscriminant
 >;
 
+interface LinkedExtractionSourceEditDiscriminant {
+  readonly mode: 'linked';
+}
+
+type LinkedExtractionSourceEdit = Extract<
+  ExtractionSourceEdit,
+  LinkedExtractionSourceEditDiscriminant
+>;
+
 interface CreatedDestination<File extends ExtractionFile> {
   readonly file: File;
   readonly intendedBasename: string;
@@ -172,12 +181,12 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
     return true;
   }
 
-  let initialEdit: ExtractionSourceEdit;
+  let initialEdit: LinkedExtractionSourceEdit;
   try {
     initialEdit = buildSourceEdit(
       creation.file,
       sourcePath,
-      originalSource.length,
+      originalSource,
       plan.draft,
       runtime
     );
@@ -263,26 +272,42 @@ function areSourceEditsEqual(
   first: ExtractionSourceEdit,
   second: ExtractionSourceEdit
 ): boolean {
-  return first.cursorOffset === second.cursorOffset
-    && first.range.from === second.range.from
-    && first.range.to === second.range.to
-    && first.replacement === second.replacement;
+  if (
+    first.mode !== second.mode
+    || first.range.from !== second.range.from
+    || first.range.to !== second.range.to
+    || first.replacement !== second.replacement
+  ) {
+    return false;
+  }
+  if (first.mode === 'open') {
+    return true;
+  }
+  return second.mode === 'linked'
+    && first.cursorOffset === second.cursorOffset;
 }
 
 function buildSourceEdit<File extends ExtractionFile>(
   file: File,
   sourcePath: string,
-  sourceLength: number,
+  originalSource: string,
   draft: SectionExtractionDraft,
   runtime: ExtractionRuntime<File>
-): ExtractionSourceEdit {
+): LinkedExtractionSourceEdit {
   const linktext = runtime.getLinktext(file, sourcePath);
   const wikilink = createExtractionWikilink(
     linktext,
     draft.displayTitle,
     file.basename
   );
-  return createExtractionSourceEdit(sourceLength, draft, wikilink);
+  const edit = createExtractionSourceEdit(originalSource, draft, {
+    mode: 'linked',
+    wikilink
+  });
+  if (edit.mode !== 'linked') {
+    throw new TypeError('Linked extraction must create a linked source edit.');
+  }
+  return edit;
 }
 
 function createSourceOperationFailure(
@@ -312,7 +337,7 @@ function commitSourceExtraction<File extends ExtractionFile>(
   originalSource: string,
   sourcePath: string,
   draft: SectionExtractionDraft,
-  initialEdit: ExtractionSourceEdit,
+  initialEdit: LinkedExtractionSourceEdit,
   runtime: ExtractionRuntime<File>,
   creation: CreatedDestination<File>
 ): CommitResult {
@@ -325,12 +350,12 @@ function commitSourceExtraction<File extends ExtractionFile>(
     return { kind: 'rollback', notice: sourceFailure };
   }
 
-  let finalEdit: ExtractionSourceEdit;
+  let finalEdit: LinkedExtractionSourceEdit;
   try {
     finalEdit = buildSourceEdit(
       creation.file,
       sourcePath,
-      originalSource.length,
+      originalSource,
       draft,
       runtime
     );

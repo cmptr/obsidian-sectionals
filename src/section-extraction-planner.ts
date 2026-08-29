@@ -15,11 +15,27 @@ export type ExtractionInvalidReason =
 
 export type ExtractionLineEnding = '\n' | '\r\n';
 
-export interface ExtractionSourceEdit {
-  readonly cursorOffset: number;
-  readonly range: MarkdownRange;
-  readonly replacement: string;
-}
+export type ExtractionSourceEditRequest =
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | { readonly mode: 'linked'; readonly wikilink: string }
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | { readonly mode: 'open' };
+
+// eslint-disable-next-line perfectionist/sort-modules -- Keep the approved public contracts in specification order.
+export type ExtractionSourceEdit =
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | {
+    readonly cursorOffset: number;
+    readonly mode: 'linked';
+    readonly range: MarkdownRange;
+    readonly replacement: string;
+  }
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | {
+    readonly mode: 'open';
+    readonly range: MarkdownRange;
+    readonly replacement: '';
+  };
 
 export interface SectionExtractionDraft {
   readonly destinationContent: string;
@@ -28,7 +44,6 @@ export interface SectionExtractionDraft {
   readonly lineEnding: ExtractionLineEnding;
   readonly relativeTargets: readonly RelativeMarkdownTarget[];
   readonly sectionRange: MarkdownRange;
-  readonly sourceBodyRange: MarkdownRange;
 }
 
 export type SectionExtractionPlan =
@@ -40,22 +55,35 @@ export type SectionExtractionPlan =
   | { readonly kind: 'unavailable' };
 
 export function createExtractionSourceEdit(
-  sourceLength: number,
+  source: string,
   draft: SectionExtractionDraft,
-  wikilink: string
+  request: ExtractionSourceEditRequest
 ): ExtractionSourceEdit {
-  if (!isCanonicalExtractionWikilink(wikilink)) {
+  if (request.mode === 'open') {
+    return {
+      mode: 'open',
+      range: draft.sectionRange,
+      replacement: ''
+    };
+  }
+  if (!isCanonicalExtractionWikilink(request.wikilink)) {
     throw new TypeError('Wikilink must contain a non-empty target.');
   }
 
-  const paragraphPrefix = `${draft.lineEnding}${draft.lineEnding}`;
-  const paragraphSuffix = draft.sourceBodyRange.to < sourceLength
-    ? paragraphPrefix
+  const leadingSeparator = needsLeadingParagraphSeparator(
+      source,
+      draft.sectionRange.from
+    )
+    ? draft.lineEnding
+    : '';
+  const trailingSeparator = draft.sectionRange.to < source.length
+    ? `${draft.lineEnding}${draft.lineEnding}`
     : draft.lineEnding;
   return {
-    cursorOffset: draft.sourceBodyRange.from + paragraphPrefix.length,
-    range: draft.sourceBodyRange,
-    replacement: `${paragraphPrefix}${wikilink}${paragraphSuffix}`
+    cursorOffset: draft.sectionRange.from + leadingSeparator.length,
+    mode: 'linked',
+    range: draft.sectionRange,
+    replacement: `${leadingSeparator}${request.wikilink}${trailingSeparator}`
   };
 }
 
@@ -108,9 +136,8 @@ export function planSectionExtraction(
   const destinationContent = `# ${title.headingMarkup}${lineEnding}${lineEnding}${destinationBody}`;
   const dependencyAnalysis = analyzeExtractionDependencies(
     source,
-    sourceBodyRange,
-    destinationContent,
-    { from: section.heading.lineStart, to: section.heading.syntaxEnd }
+    section.range,
+    destinationContent
   );
   if (dependencyAnalysis.kind === 'invalid') {
     return dependencyAnalysis;
@@ -123,8 +150,7 @@ export function planSectionExtraction(
       filenameStem,
       lineEnding,
       relativeTargets: dependencyAnalysis.targets,
-      sectionRange: section.range,
-      sourceBodyRange
+      sectionRange: section.range
     },
     kind: 'ready'
   };
@@ -254,4 +280,14 @@ function isCanonicalExtractionWikilink(wikilink: string): boolean {
   }
 
   return payload.slice(componentFrom).trim() !== '';
+}
+
+function needsLeadingParagraphSeparator(
+  source: string,
+  sectionFrom: number
+): boolean {
+  if (sectionFrom === 0) {
+    return false;
+  }
+  return !/(?:^|\r?\n)[\t ]*\r?\n$/u.test(source.slice(0, sectionFrom));
 }

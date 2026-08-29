@@ -277,6 +277,16 @@ describe('analyzeExtractionDependencies inline targets', () => {
 });
 
 describe('analyzeExtractionDependencies reference boundaries', () => {
+  it('is ready when a heading reference and definition share the whole extracted range', () => {
+    expect(
+      analyzeExtractionDependencies(
+        '# [Project][ref]\nbody\n[ref]: note.md\n',
+        { from: 0, to: '# [Project][ref]\nbody\n[ref]: note.md\n'.length },
+        '# [Project][ref]\n\nbody\n[ref]: note.md\n'
+      ).kind
+    ).toBe('ready');
+  });
+
   it('is ready when a reference definition and every use are inside', () => {
     const source = [
       '# Extract',
