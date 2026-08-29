@@ -1,7 +1,7 @@
 /* eslint-disable perfectionist/sort-modules -- Keep public command contracts and helpers near their existing consumers. */
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
-import type { App, Editor, PluginManifest } from 'obsidian';
+import type { App, Editor, MarkdownFileInfo, MarkdownView, PluginManifest } from 'obsidian';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
 import { normalizePath, Notice, Plugin, TFile, TFolder } from 'obsidian';
@@ -17,7 +17,8 @@ import type { StructuralAction, StructuralEditPlan } from './structural-action.t
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
 import { openDeletionTargetPicker } from './deletion-target-modal.ts';
-import { executeSectionExtraction } from './section-extraction-executor.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible executor imports compact.
+import { executeSectionExtraction, ExtractionSourceChangedError } from './section-extraction-executor.ts';
 import { planSectionExtraction } from './section-extraction-planner.ts';
 import { planSectionMovement } from './section-movement-planner.ts';
 
@@ -260,9 +261,19 @@ export default class SectionalsPlugin extends Plugin {
           return false;
         }
         if (!isChecking) {
+          if (context.editor === undefined) {
+            return false;
+          }
+          const expectedSourcePath = normalizePath(sourceFile.path);
           const execution = runExtractionCommand(
-            editor,
-            normalizePath(sourceFile.path),
+            createGuardedExtractionEditor(
+              this.app,
+              sourceFile,
+              expectedSourcePath,
+              context,
+              editor
+            ),
+            expectedSourcePath,
             createExtractionRuntime(this.app),
             this.extractionDependencies
           );
@@ -288,6 +299,59 @@ export function formatExtractionNotice(
   }
   const retainedPath = details.path;
   return template.replace('{path}', () => retainedPath);
+}
+
+function createGuardedExtractionEditor(
+  app: App,
+  sourceFile: TFile,
+  expectedSourcePath: string,
+  context: MarkdownFileInfo | MarkdownView,
+  editor: Editor
+): ExtractionEditor {
+  function assertSourceIdentity(): void {
+    try {
+      if (
+        sourceFile.path !== expectedSourcePath
+        || app.vault.getAbstractFileByPath(expectedSourcePath) !== sourceFile
+        || context.file !== sourceFile
+        || context.editor !== editor
+      ) {
+        throw new ExtractionSourceChangedError();
+      }
+    } catch (error) {
+      if (error instanceof ExtractionSourceChangedError) {
+        throw error;
+      }
+      throw new ExtractionSourceChangedError();
+    }
+  }
+
+  return {
+    getCursor(side): ReturnType<ExtractionEditor['getCursor']> {
+      assertSourceIdentity();
+      return editor.getCursor(side);
+    },
+    getValue(): string {
+      assertSourceIdentity();
+      return editor.getValue();
+    },
+    offsetToPos(offset): ReturnType<ExtractionEditor['offsetToPos']> {
+      assertSourceIdentity();
+      return editor.offsetToPos(offset);
+    },
+    posToOffset(position): number {
+      assertSourceIdentity();
+      return editor.posToOffset(position);
+    },
+    replaceRange(replacement, from, to, origin): void {
+      assertSourceIdentity();
+      editor.replaceRange(replacement, from, to, origin);
+    },
+    setCursor(position, character): void {
+      assertSourceIdentity();
+      editor.setCursor(position, character);
+    }
+  };
 }
 
 function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
@@ -360,10 +424,14 @@ async function runExtractionCommand(
         dependencies.notify(message);
       }
     );
-  } catch {
+  } catch (error) {
     if (!notificationState.didNotify) {
       try {
-        dependencies.notify(EXTRACTION_NOTICES['create-failed']);
+        dependencies.notify(
+          error instanceof ExtractionSourceChangedError
+            ? EXTRACTION_NOTICES['source-changed']
+            : EXTRACTION_NOTICES['create-failed']
+        );
       } catch {
         // Notice failures must not become unhandled command rejections.
       }

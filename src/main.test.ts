@@ -24,6 +24,7 @@ import SectionalsPlugin, {
   executeStructurePickerCommand,
   formatExtractionNotice
 } from './main.ts';
+import { executeSectionExtraction } from './section-extraction-executor.ts';
 
 interface EditorFixture {
   editor: SectionEditor;
@@ -93,8 +94,15 @@ function asApp(value: unknown): App {
   return value as App;
 }
 
-function createMarkdownView(file: PublicTFile): MarkdownView {
-  return { file } as MarkdownView;
+function asMarkdownView(value: unknown): MarkdownView {
+  return value as MarkdownView;
+}
+
+function createMarkdownView(
+  file: PublicTFile,
+  editor: SectionEditor
+): MarkdownView {
+  return asMarkdownView({ editor, file });
 }
 
 function loadPluginCommands(
@@ -127,6 +135,179 @@ function getRegisteredCommands(
 ): ReadonlyMap<string, Command> {
   return new Map(
     fixture.addCommand.mock.calls.map(([command]) => [command.id, command])
+  );
+}
+
+const IDENTITY_DESTINATION_PATH = 'Folder/Extract me.md';
+const IDENTITY_SOURCE = '# Extract me\nbody\n';
+const IDENTITY_SOURCE_PATH = 'Folder/source.md';
+
+type MockObsidianApp = ReturnType<typeof ObsidianApp.createConfigured__>;
+type SourceIdentityFile = PublicTFile & TFile;
+
+interface MutableIdentityView {
+  editor: Editor;
+  file: SourceIdentityFile;
+}
+
+interface IdentityHarness {
+  readonly alternateFixture: EditorFixture;
+  readonly app: MockObsidianApp;
+  readonly commands: ReadonlyMap<string, Command>;
+  readonly fixture: EditorFixture;
+  getCompletion(): Promise<void> | undefined;
+  readonly notify: ReturnType<typeof vi.fn>;
+  readonly otherFile: SourceIdentityFile;
+  readonly sourceFile: SourceIdentityFile;
+  readonly view: MutableIdentityView;
+}
+
+type OriginalVaultCreate = MockObsidianApp['vault']['create'];
+type SourceIdentityMutation = (
+  harness: IdentityHarness,
+  originalCreate: OriginalVaultCreate
+) => Promise<void> | void;
+
+function createIdentityHarness(): IdentityHarness {
+  const app = ObsidianApp.createConfigured__({
+    files: {
+      'Folder/other.md': IDENTITY_SOURCE,
+      [IDENTITY_SOURCE_PATH]: IDENTITY_SOURCE
+    }
+  });
+  const sourceFile = app.vault.getAbstractFileByPath(IDENTITY_SOURCE_PATH);
+  const otherFile = app.vault.getAbstractFileByPath('Folder/other.md');
+  if (
+    !(sourceFile instanceof PublicTFile)
+    || !(sourceFile instanceof TFile)
+    || !(otherFile instanceof PublicTFile)
+    || !(otherFile instanceof TFile)
+  ) {
+    throw new TypeError('Expected source identity files in the fake vault.');
+  }
+
+  const fixture = createEditor(
+    IDENTITY_SOURCE,
+    IDENTITY_SOURCE.indexOf('body')
+  );
+  const alternateFixture = createEditor(
+    IDENTITY_SOURCE,
+    IDENTITY_SOURCE.indexOf('body')
+  );
+  const view = {
+    editor: fixture.editor as Editor,
+    file: sourceFile
+  };
+  const notify = vi.fn();
+  let completion: Promise<void> | undefined;
+  const commands = getRegisteredCommands(
+    loadPluginCommands(asApp(app), {
+      execute: executeSectionExtraction,
+      notify,
+      observeExecution(execution) {
+        completion = execution;
+      }
+    })
+  );
+
+  return {
+    alternateFixture,
+    app,
+    commands,
+    fixture,
+    getCompletion(): Promise<void> | undefined {
+      return completion;
+    },
+    notify,
+    otherFile,
+    sourceFile,
+    view
+  };
+}
+
+async function invokeIdentityExtraction(
+  harness: IdentityHarness
+): Promise<void> {
+  const result = harness.commands.get(
+    'extract-current-section-to-linked-note'
+  )?.editorCheckCallback?.(
+    false,
+    harness.fixture.editor as Editor,
+    asMarkdownView(harness.view)
+  );
+  expect(result).toBe(true);
+  const completion = harness.getCompletion();
+  if (completion === undefined) {
+    throw new TypeError('Expected an observed extraction promise.');
+  }
+  await completion;
+}
+
+async function runPostCreateIdentityMutation(
+  mutate: SourceIdentityMutation,
+  beforeExtraction?: (harness: IdentityHarness) => void
+): Promise<IdentityHarness> {
+  const harness = createIdentityHarness();
+  const originalCreate = harness.app.vault.create.bind(harness.app.vault);
+  let didMutate = false;
+  vi.spyOn(harness.app.vault, 'create').mockImplementation(
+    async (path, content, options) => {
+      const created = await originalCreate(path, content, options);
+      if (path === IDENTITY_DESTINATION_PATH && !didMutate) {
+        didMutate = true;
+        await mutate(harness, originalCreate);
+      }
+      return created;
+    }
+  );
+  const deleteFile = vi.spyOn(harness.app.vault, 'delete');
+  beforeExtraction?.(harness);
+
+  await invokeIdentityExtraction(harness);
+
+  const destination = deleteFile.mock.calls.find(
+    ([file]) => file.path === IDENTITY_DESTINATION_PATH
+  )?.[0];
+  expect(destination).toBeInstanceOf(PublicTFile);
+  expect(
+    deleteFile.mock.calls.filter(([file]) => file === destination)
+  ).toHaveLength(1);
+  expect(
+    harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
+  ).toBeNull();
+  expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+  expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
+  expect(harness.notify).toHaveBeenCalledOnce();
+  expect(harness.notify).toHaveBeenCalledWith(
+    'The source note changed; extraction was cancelled.'
+  );
+  return harness;
+}
+
+async function runFinalGuardIdentityMutation(
+  configureMutation: (harness: IdentityHarness) => void
+): Promise<void> {
+  const harness = createIdentityHarness();
+  configureMutation(harness);
+  const deleteFile = vi.spyOn(harness.app.vault, 'delete');
+
+  await invokeIdentityExtraction(harness);
+
+  const destination = deleteFile.mock.calls.find(
+    ([file]) => file.path === IDENTITY_DESTINATION_PATH
+  )?.[0];
+  expect(destination).toBeInstanceOf(PublicTFile);
+  expect(
+    deleteFile.mock.calls.filter(([file]) => file === destination)
+  ).toHaveLength(1);
+  expect(
+    harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
+  ).toBeNull();
+  expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+  expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
+  expect(harness.notify).toHaveBeenCalledOnce();
+  expect(harness.notify).toHaveBeenCalledWith(
+    'The source note changed; extraction was cancelled.'
   );
 }
 
@@ -682,11 +863,14 @@ describe('SectionalsPlugin', () => {
         ?.editorCheckCallback?.(
           false,
           fixture.editor as Editor,
-          { file: { path: 'Notes/source.md' } } as MarkdownView
+          asMarkdownView({
+            editor: fixture.editor,
+            file: { path: 'Notes/source.md' }
+          })
         )
     ).toBe(true);
     expect(execute).toHaveBeenCalledOnce();
-    expect(execute.mock.calls[0]?.[0]).toBe(fixture.editor);
+    expect(execute.mock.calls[0]?.[0]).not.toBe(fixture.editor);
     expect(execute.mock.calls[0]?.[1]).toBe('Notes/source.md');
     expect(observeExecution).toHaveBeenCalledOnce();
     expect(completion).toBeInstanceOf(Promise);
@@ -784,7 +968,7 @@ describe('SectionalsPlugin', () => {
         ?.editorCheckCallback?.(
           false,
           fixture.editor as Editor,
-          createMarkdownView(sourceFile)
+          createMarkdownView(sourceFile, fixture.editor)
         )
     ).toBe(true);
     await completion;
@@ -816,6 +1000,180 @@ describe('SectionalsPlugin', () => {
     expect(read).toHaveBeenCalledWith(expect.any(PublicTFile));
     expect(deleteFile).toHaveBeenCalledWith(expect.any(PublicTFile));
     expect(app.vault.getAbstractFileByPath('Extracted/created.md')).toBeNull();
+  });
+
+  it('cancels and rolls back when the source file is renamed during extraction', async () => {
+    await runPostCreateIdentityMutation(async (harness) => {
+      await harness.app.vault.rename(
+        harness.sourceFile,
+        'Folder/renamed.md'
+      );
+    });
+  });
+
+  it('cancels and rolls back when the source file is deleted during extraction', async () => {
+    await runPostCreateIdentityMutation(async (harness) => {
+      await harness.app.vault.delete(harness.sourceFile);
+    });
+  });
+
+  it('cancels and rolls back when another file replaces the source path', async () => {
+    await runPostCreateIdentityMutation(
+      async (harness, originalCreate) => {
+        await harness.app.vault.delete(harness.sourceFile);
+        const replacement = await originalCreate(
+          IDENTITY_SOURCE_PATH,
+          IDENTITY_SOURCE
+        );
+        expect(replacement).not.toBe(harness.sourceFile);
+      }
+    );
+  });
+
+  it('cancels and rolls back when the command context rebinds to another same-content file', async () => {
+    await runPostCreateIdentityMutation((harness) => {
+      harness.view.file = harness.otherFile;
+    });
+  });
+
+  it('cancels and rolls back when the command context rebinds to another same-content editor', async () => {
+    await runPostCreateIdentityMutation((harness) => {
+      harness.view.editor = harness.alternateFixture.editor as Editor;
+    });
+  });
+
+  it('guards source identity after final linktext resolution', async () => {
+    await runFinalGuardIdentityMutation((harness) => {
+      const originalFileToLinktext = harness.app.metadataCache.fileToLinktext
+        .bind(harness.app.metadataCache);
+      let callCount = 0;
+      vi.spyOn(harness.app.metadataCache, 'fileToLinktext')
+        .mockImplementation((file, sourcePath, omitMdExtension) => {
+          const linktext = originalFileToLinktext(
+            file,
+            sourcePath,
+            omitMdExtension
+          );
+          callCount += 1;
+          if (callCount === 2) {
+            harness.view.file = harness.otherFile;
+          }
+          return linktext;
+        });
+    });
+  });
+
+  it('guards source identity between final position mappings', async () => {
+    await runFinalGuardIdentityMutation((harness) => {
+      const offsetToPosition = vi.mocked(harness.fixture.editor.offsetToPos);
+      const originalOffsetToPosition = offsetToPosition.getMockImplementation();
+      if (originalOffsetToPosition === undefined) {
+        throw new TypeError('Expected the editor position fake.');
+      }
+      let callCount = 0;
+      offsetToPosition.mockImplementation((offset) => {
+        const position = originalOffsetToPosition(offset);
+        callCount += 1;
+        if (callCount === 1) {
+          harness.view.editor = harness.alternateFixture.editor as Editor;
+        }
+        return position;
+      });
+    });
+  });
+
+  it('guards source identity after final position mapping', async () => {
+    await runFinalGuardIdentityMutation((harness) => {
+      const offsetToPosition = vi.mocked(harness.fixture.editor.offsetToPos);
+      const originalOffsetToPosition = offsetToPosition.getMockImplementation();
+      if (originalOffsetToPosition === undefined) {
+        throw new TypeError('Expected the editor position fake.');
+      }
+      let callCount = 0;
+      offsetToPosition.mockImplementation((offset) => {
+        const position = originalOffsetToPosition(offset);
+        callCount += 1;
+        if (callCount === 2) {
+          harness.view.file = harness.otherFile;
+        }
+        return position;
+      });
+    });
+  });
+
+  it('guards source identity immediately before source replacement', async () => {
+    await runFinalGuardIdentityMutation((harness) => {
+      const getValue = vi.mocked(harness.fixture.editor.getValue);
+      const originalGetValue = getValue.getMockImplementation();
+      if (originalGetValue === undefined) {
+        throw new TypeError('Expected the editor source fake.');
+      }
+      let callCount = 0;
+      getValue.mockImplementation(() => {
+        const source = originalGetValue();
+        callCount += 1;
+        if (callCount === 5) {
+          harness.view.file = harness.otherFile;
+        }
+        return source;
+      });
+    });
+  });
+
+  it('preserves repeat movement state when source identity changes', async () => {
+    const movementSource = '## Alpha\na\n## Beta\nb\n';
+    const movement = createEditor(
+      movementSource,
+      movementSource.indexOf('\na\n') + 1
+    );
+    const harness = await runPostCreateIdentityMutation(
+      (identityHarness) => {
+        identityHarness.view.file = identityHarness.otherFile;
+      },
+      (identityHarness) => {
+        expect(
+          identityHarness.commands.get('move-current-section-down')
+            ?.editorCheckCallback?.(
+              false,
+              movement.editor as Editor,
+              {} as MarkdownView
+            )
+        ).toBe(true);
+      }
+    );
+    const repeatedSource = '## One\none\n## Two\ntwo\n';
+    const repeated = createEditor(
+      repeatedSource,
+      repeatedSource.indexOf('one')
+    );
+
+    expect(
+      harness.commands.get('repeat-last-structural-action')
+        ?.editorCheckCallback?.(
+          false,
+          repeated.editor as Editor,
+          {} as MarkdownView
+        )
+    ).toBe(true);
+    expect(repeated.editor.getValue()).toBe(
+      '## Two\ntwo\n## One\none\n'
+    );
+  });
+
+  it('extracts successfully while all captured source identities remain stable', async () => {
+    const harness = createIdentityHarness();
+
+    await invokeIdentityExtraction(harness);
+
+    expect(harness.fixture.replaceRange).toHaveBeenCalledOnce();
+    expect(harness.fixture.editor.getValue()).toBe(
+      '# Extract me\n\n[[Extract me]]\n'
+    );
+    expect(harness.fixture.setCursor).toHaveBeenCalledOnce();
+    expect(harness.notify).not.toHaveBeenCalled();
+    expect(
+      harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
+    ).toBeInstanceOf(PublicTFile);
   });
 
   it.each(
@@ -893,7 +1251,10 @@ describe('SectionalsPlugin', () => {
           ?.editorCheckCallback?.(
             false,
             fixture.editor as Editor,
-            { file: { path: 'Notes/source.md' } } as MarkdownView
+            asMarkdownView({
+              editor: fixture.editor,
+              file: { path: 'Notes/source.md' }
+            })
           )
       ).toBe(true);
       await completion;
@@ -935,7 +1296,10 @@ describe('SectionalsPlugin', () => {
         ?.editorCheckCallback?.(
           false,
           fixture.editor as Editor,
-          { file: { path: 'Notes/source.md' } } as MarkdownView
+          asMarkdownView({
+            editor: fixture.editor,
+            file: { path: 'Notes/source.md' }
+          })
         )
     ).toBe(true);
     await completion;
@@ -976,7 +1340,10 @@ describe('SectionalsPlugin', () => {
         ?.editorCheckCallback?.(
           false,
           fixture.editor as Editor,
-          { file: { path: 'Notes/source.md' } } as MarkdownView
+          asMarkdownView({
+            editor: fixture.editor,
+            file: { path: 'Notes/source.md' }
+          })
         )
     ).toBe(true);
     await completion;
@@ -1007,7 +1374,10 @@ describe('SectionalsPlugin', () => {
         ?.editorCheckCallback?.(
           false,
           fixture.editor as Editor,
-          { file: { path: 'Notes/source.md' } } as MarkdownView
+          asMarkdownView({
+            editor: fixture.editor,
+            file: { path: 'Notes/source.md' }
+          })
         )
     ).toBe(true);
     await completion;
@@ -1056,7 +1426,10 @@ describe('SectionalsPlugin', () => {
         ?.editorCheckCallback?.(
           false,
           extraction.editor as Editor,
-          { file: { path: 'Notes/source.md' } } as MarkdownView
+          asMarkdownView({
+            editor: extraction.editor,
+            file: { path: 'Notes/source.md' }
+          })
         )
     ).toBe(true);
     await completion;

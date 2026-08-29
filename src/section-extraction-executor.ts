@@ -18,6 +18,13 @@ import { createExtractionSourceEdit, planSectionExtraction } from './section-ext
 
 const MAXIMUM_SUFFIX_ATTEMPTS = 10_000;
 
+export class ExtractionSourceChangedError extends Error {
+  public constructor() {
+    super('Extraction source identity changed.');
+    this.name = 'ExtractionSourceChangedError';
+  }
+}
+
 export interface ExtractionEditor {
   readonly getCursor: Editor['getCursor'];
   readonly getValue: Editor['getValue'];
@@ -278,6 +285,28 @@ function buildSourceEdit<File extends ExtractionFile>(
   return createExtractionSourceEdit(sourceLength, draft, wikilink);
 }
 
+function createSourceOperationFailure(
+  error: unknown
+): ExtractionNoticeDetails {
+  return {
+    kind: error instanceof ExtractionSourceChangedError
+      ? 'source-changed'
+      : 'source-edit-failed'
+  };
+}
+
+function getPreReplacementFailure<File extends ExtractionFile>(
+  error: unknown,
+  creation: CreatedDestination<File>
+): CommitResult | null {
+  if (!doesCreatedDestinationMatch(creation)) {
+    return createCommitDestinationChanged(creation.intendedPath);
+  }
+  return error instanceof ExtractionSourceChangedError
+    ? { kind: 'rollback', notice: { kind: 'source-changed' } }
+    : null;
+}
+
 function commitSourceExtraction<File extends ExtractionFile>(
   editor: ExtractionEditor,
   originalSource: string,
@@ -323,11 +352,11 @@ function commitSourceExtraction<File extends ExtractionFile>(
   try {
     from = editor.offsetToPos(edit.range.from);
     to = editor.offsetToPos(edit.range.to);
-  } catch {
+  } catch (error) {
     if (!doesCreatedDestinationMatch(creation)) {
       return createCommitDestinationChanged(creation.intendedPath);
     }
-    return { kind: 'rollback', notice: { kind: 'source-edit-failed' } };
+    return { kind: 'rollback', notice: createSourceOperationFailure(error) };
   }
   if (!doesCreatedDestinationMatch(creation)) {
     return createCommitDestinationChanged(creation.intendedPath);
@@ -347,7 +376,11 @@ function commitSourceExtraction<File extends ExtractionFile>(
   let didReplacementThrow = false;
   try {
     editor.replaceRange(edit.replacement, from, to);
-  } catch {
+  } catch (error) {
+    const replacementFailure = getPreReplacementFailure(error, creation);
+    if (replacementFailure !== null) {
+      return replacementFailure;
+    }
     didReplacementThrow = true;
   }
 
@@ -497,8 +530,8 @@ function getSourceSnapshotFailure(
     return editor.getValue() === originalSource
       ? null
       : { kind: 'source-changed' };
-  } catch {
-    return { kind: 'source-edit-failed' };
+  } catch (error) {
+    return createSourceOperationFailure(error);
   }
 }
 
