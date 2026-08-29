@@ -18,10 +18,6 @@ import type { SectionExtractionPlan } from './section-extraction-planner.ts';
 import { executeSectionExtraction } from './section-extraction-executor.ts';
 import { planSectionExtraction } from './section-extraction-planner.ts';
 
-interface FakeFile extends ExtractionFile {
-  readonly id: number;
-}
-
 interface NotifyFixture {
   readonly notices: ExtractionNoticeDetails[];
   notify(details: ExtractionNoticeDetails): void;
@@ -32,7 +28,16 @@ interface StoredFakeFile {
   readonly file: FakeFile;
 }
 
+class FakeFile implements ExtractionFile {
+  constructor(
+    readonly id: number,
+    public basename: string,
+    public path: string
+  ) {}
+}
+
 class StatefulEditor implements ExtractionEditor {
+  beforeGetValue: ((source: string) => void) | undefined;
   readonly events: string[];
   readonly getCursor = vi.fn((_which?: 'anchor' | 'from' | 'head' | 'to') => {
     this.events.push('getCursor');
@@ -40,7 +45,9 @@ class StatefulEditor implements ExtractionEditor {
   });
   readonly getValue = vi.fn(() => {
     this.events.push('getValue');
-    return this.source;
+    const source = this.source;
+    this.beforeGetValue?.(source);
+    return source;
   });
   readonly offsetToPos = vi.fn((offset: number) => {
     this.events.push(`offsetToPos:${String(offset)}`);
@@ -48,7 +55,7 @@ class StatefulEditor implements ExtractionEditor {
   });
   readonly posToOffset = vi.fn((position: EditorPosition) => {
     this.events.push('posToOffset');
-    return position.ch;
+    return this.offsetFor(position);
   });
   readonly replaceRange = vi.fn((
     replacement: string,
@@ -56,13 +63,15 @@ class StatefulEditor implements ExtractionEditor {
     to?: EditorPosition
   ) => {
     this.events.push('replaceRange');
-    this.source = this.source.slice(0, from.ch)
+    const fromOffset = this.offsetFor(from);
+    const toOffset = this.offsetFor(to ?? from);
+    this.source = this.source.slice(0, fromOffset)
       + replacement
-      + this.source.slice((to ?? from).ch);
+      + this.source.slice(toOffset);
   });
   readonly setCursor = vi.fn((position: EditorPosition) => {
     this.events.push('setCursor');
-    this.cursorOffset = position.ch;
+    this.cursorOffset = this.offsetFor(position);
   });
 
   constructor(
@@ -77,16 +86,35 @@ class StatefulEditor implements ExtractionEditor {
     return this.source;
   }
 
+  offsetFor(position: EditorPosition): number {
+    const lines = this.source.split('\n');
+    let offset = 0;
+    for (let line = 0; line < position.line; line += 1) {
+      const content = lines[line];
+      if (content === undefined) {
+        throw new RangeError('Editor position line is out of range.');
+      }
+      offset += content.length + 1;
+    }
+    return offset + position.ch;
+  }
+
   overwriteSource(source: string): void {
     this.source = source;
   }
 
   private position(offset: number): EditorPosition {
-    return { ch: offset, line: 0 };
+    const before = this.source.slice(0, offset);
+    const finalLineStart = before.lastIndexOf('\n') + 1;
+    return {
+      ch: offset - finalLineStart,
+      line: before.split('\n').length - 1
+    };
   }
 }
 
 class StatefulRuntime implements ExtractionRuntime<FakeFile> {
+  afterRead: ((file: FakeFile) => void) | undefined;
   readonly events: string[];
   readonly files = new Map<string, StoredFakeFile>();
   readonly create = vi.fn(async (path: string, content: string) => {
@@ -94,7 +122,11 @@ class StatefulRuntime implements ExtractionRuntime<FakeFile> {
     return this.storeCreatedFile(path, content);
   });
   readonly delete = vi.fn(async (file: FakeFile) => {
-    this.events.push(`delete:${file.path}`);
+    this.events.push(`delete:${file.path}:${String(file.id)}`);
+    const entry = this.files.get(file.path);
+    if (entry?.file !== file || entry.file.id !== file.id) {
+      throw new Error('file identity changed before delete');
+    }
     this.files.delete(file.path);
   });
   readonly fileExists = vi.fn((path: string) => {
@@ -113,12 +145,14 @@ class StatefulRuntime implements ExtractionRuntime<FakeFile> {
     return { path: 'Extracted' };
   });
   readonly read = vi.fn(async (file: FakeFile) => {
-    this.events.push(`read:${file.path}`);
+    this.events.push(`read:${file.path}:${String(file.id)}`);
     const entry = this.files.get(file.path);
-    if (entry === undefined) {
-      throw new Error('missing file');
+    if (entry?.file !== file || entry.file.id !== file.id) {
+      throw new Error('file identity changed before read');
     }
-    return entry.content;
+    const { content } = entry;
+    this.afterRead?.(file);
+    return content;
   });
   readonly resolveLink = vi.fn<ExtractionRuntime<FakeFile>['resolveLink']>(() => null);
 
@@ -130,7 +164,7 @@ class StatefulRuntime implements ExtractionRuntime<FakeFile> {
 
   storeCreatedFile(path: string, content: string): FakeFile {
     const basename = path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/u, '');
-    const file = { basename, id: this.nextId, path };
+    const file = new FakeFile(this.nextId, basename, path);
     this.nextId += 1;
     this.files.set(path, { content, file });
     return file;
@@ -232,9 +266,9 @@ describe('executeSectionExtraction success', () => {
     expect(editor.replaceRange).toHaveBeenCalledExactlyOnceWith(
       '\n\n[[Beta]]\n',
       { ch: 6, line: 0 },
-      { ch: 12, line: 0 }
+      { ch: 0, line: 2 }
     );
-    expect(editor.setCursor).toHaveBeenCalledExactlyOnceWith({ ch: 8, line: 0 });
+    expect(editor.setCursor).toHaveBeenCalledExactlyOnceWith({ ch: 0, line: 2 });
     expect(events).toEqual([
       'getValue',
       'getCursor',
@@ -245,15 +279,221 @@ describe('executeSectionExtraction success', () => {
       'create:Extracted/Beta.md',
       'getLinktext:Extracted/Beta.md:Projects/Source.md',
       'getValue',
-      'read:Extracted/Beta.md',
+      'read:Extracted/Beta.md:1',
       'getValue',
+      'getLinktext:Extracted/Beta.md:Projects/Source.md',
       'offsetToPos:6',
       'offsetToPos:12',
+      'getValue',
       'replaceRange',
       'getValue',
       'offsetToPos:8',
       'setCursor'
     ]);
+    expect(runtime.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeSectionExtraction created-file identity', () => {
+  it('retains an unknown file returned at the wrong path without linking or deleting it', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.create.mockImplementationOnce(async (_path, content) => {
+      const file = new FakeFile(99, 'Beta', 'Elsewhere/Beta.md');
+      runtime.files.set(file.path, { content, file });
+      return file;
+    });
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(runtime.getLinktext).not.toHaveBeenCalled();
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+  });
+
+  it('retains an unknown file whose returned path cannot be inspected', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.create.mockImplementationOnce(async () => {
+      const file = new FakeFile(99, 'Beta', 'Extracted/Beta.md');
+      Object.defineProperty(file, 'path', {
+        get() {
+          throw new Error('path unavailable');
+        }
+      });
+      return file;
+    });
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.getLinktext).not.toHaveBeenCalled();
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+  });
+
+  it('retains an unknown file returned with the wrong basename', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.create.mockImplementationOnce(async (path, content) => {
+      const file = runtime.storeCreatedFile(path, content);
+      file.basename = 'Other';
+      return file;
+    });
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(runtime.getLinktext).not.toHaveBeenCalled();
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+  });
+
+  it('retains the destination when its path changes during destination readback', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.afterRead = (file): void => {
+      file.path = 'Moved/Beta.md';
+    };
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('retains a same-path object that the adapter cannot read by exact identity', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    let returnedFile: FakeFile | undefined;
+    runtime.create.mockImplementationOnce(async (path, content) => {
+      runtime.storeCreatedFile(path, content);
+      returnedFile = new FakeFile(99, 'Beta', path);
+      return returnedFile;
+    });
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'rollback-failed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.read).toHaveBeenCalledExactlyOnceWith(returnedFile);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeSectionExtraction final commit gate', () => {
+  it('does not yield after the matching final source snapshot', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    let sourceReadCount = 0;
+    let didMutationMicrotaskRun = false;
+    let didMutationRunBeforeReplacement: boolean | undefined;
+    editor.beforeGetValue = (): void => {
+      sourceReadCount += 1;
+      if (sourceReadCount === 3) {
+        queueMicrotask(() => {
+          didMutationMicrotaskRun = true;
+          editor.overwriteSource('# Zeta\nbody\n');
+        });
+      }
+    };
+    editor.replaceRange.mockImplementationOnce((replacement, from, to) => {
+      didMutationRunBeforeReplacement = didMutationMicrotaskRun;
+      const source = editor.currentSource();
+      editor.overwriteSource(
+        source.slice(0, editor.offsetFor(from))
+          + replacement
+          + source.slice(editor.offsetFor(to ?? from))
+      );
+    });
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(didMutationMicrotaskRun).toBe(true);
+    expect(didMutationRunBeforeReplacement).toBe(false);
+    expect(editor.replaceRange).toHaveBeenCalledOnce();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([]);
+  });
+
+  it('rebuilds the source edit from the final shortest linktext', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.getLinktext
+      .mockReturnValueOnce('Beta')
+      .mockReturnValueOnce('Extracted/Beta');
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(runtime.getLinktext).toHaveBeenCalledTimes(2);
+    expect(editor.currentSource()).toBe(
+      '# Beta\n\n[[Extracted/Beta|Beta]]\n'
+    );
+    expect(notices).toEqual([]);
+  });
+
+  it('retains the destination when final linktext generation changes its path', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.getLinktext
+      .mockReturnValueOnce('Beta')
+      .mockImplementationOnce((file) => {
+        file.path = 'Moved/Beta.md';
+        return 'Moved/Beta';
+      });
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(editor.replaceRange).not.toHaveBeenCalled();
     expect(runtime.delete).not.toHaveBeenCalled();
   });
 });
@@ -277,7 +517,7 @@ describe('executeSectionExtraction collision races', () => {
       runtime.events.push(`create:${path}`);
       runtime.files.set(path, {
         content: 'won by another writer',
-        file: { basename: 'Beta', id: 999, path }
+        file: new FakeFile(999, 'Beta', path)
       });
       throw new Error('already exists');
     });
@@ -298,7 +538,17 @@ describe('executeSectionExtraction collision races', () => {
       ['Projects/Source.md', 'Beta.md'],
       ['Projects/Source.md', 'Beta 1.md']
     ]);
-    expect(runtime.getLinktext).toHaveBeenCalledExactlyOnceWith(
+    expect(runtime.getLinktext).toHaveBeenCalledTimes(2);
+    expect(runtime.getLinktext).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        basename: 'Beta 1',
+        path: 'Archive/Nested/Beta 1.md'
+      }),
+      'Projects/Source.md'
+    );
+    expect(runtime.getLinktext).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         basename: 'Beta 1',
         path: 'Archive/Nested/Beta 1.md'
@@ -337,7 +587,7 @@ describe('executeSectionExtraction collision races', () => {
     runtime.create.mockImplementation(async (path) => {
       runtime.files.set(path, {
         content: 'won by another writer',
-        file: { basename: 'collision', id: 999, path }
+        file: new FakeFile(999, 'collision', path)
       });
       throw new Error('already exists');
     });
@@ -567,6 +817,64 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
+  it('retains a rollback target whose path changes during readback', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.getLinktext.mockImplementationOnce(() => {
+      throw new Error('link generation failed');
+    });
+    runtime.afterRead = (file): void => {
+      file.path = 'Moved/Beta.md';
+    };
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('retains an identity replacement installed between rollback read and delete', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    let createdFile: FakeFile | undefined;
+    runtime.create.mockImplementationOnce(async (path, content) => {
+      createdFile = runtime.storeCreatedFile(path, content);
+      return createdFile;
+    });
+    runtime.getLinktext.mockImplementationOnce(() => {
+      throw new Error('link generation failed');
+    });
+    runtime.afterRead = (file): void => {
+      const entry = runtime.files.get(file.path);
+      if (entry !== undefined) {
+        runtime.files.set(file.path, {
+          content: entry.content,
+          file: new FakeFile(999, file.basename, file.path)
+        });
+      }
+    };
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'rollback-failed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.delete).toHaveBeenCalledExactlyOnceWith(createdFile);
+    expect(runtime.files.get('Extracted/Beta.md')?.file).not.toBe(createdFile);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
   it('rolls back when source range mapping fails before replacement', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     editor.offsetToPos.mockImplementationOnce(() => {
@@ -607,6 +915,46 @@ describe('executeSectionExtraction pre-commit rollback', () => {
 });
 
 describe('executeSectionExtraction source mutation outcomes', () => {
+  it('rolls back when replaceRange returns without mutating the source', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce(() => {
+      editor.events.push('replaceRange:no-op');
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(runtime.delete).toHaveBeenCalledOnce();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(editor.setCursor).not.toHaveBeenCalled();
+  });
+
+  it('retains the destination when replaceRange returns after a partial mutation', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce(() => {
+      editor.overwriteSource('# Beta\n\n[[Bet');
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'indeterminate-source-mutation',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.setCursor).not.toHaveBeenCalled();
+  });
+
   it('rolls back when replaceRange throws before mutating the source', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     editor.replaceRange.mockImplementationOnce(() => {
@@ -632,7 +980,9 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     editor.replaceRange.mockImplementationOnce((replacement, from, to) => {
       const source = editor.currentSource();
       editor.overwriteSource(
-        source.slice(0, from.ch) + replacement + source.slice((to ?? from).ch)
+        source.slice(0, editor.offsetFor(from))
+          + replacement
+          + source.slice(editor.offsetFor(to ?? from))
       );
       throw new Error('edit reported failure');
     });
@@ -678,7 +1028,9 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     editor.replaceRange.mockImplementationOnce((replacement, from, to) => {
       const source = editor.currentSource();
       editor.overwriteSource(
-        source.slice(0, from.ch) + replacement + source.slice((to ?? from).ch)
+        source.slice(0, editor.offsetFor(from))
+          + replacement
+          + source.slice(editor.offsetFor(to ?? from))
       );
       editor.getValue.mockImplementationOnce(() => {
         throw new Error('inspection failed');
