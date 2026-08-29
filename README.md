@@ -2,7 +2,7 @@
 
 Remove whole parts of a note without selecting them first.
 
-Sectionals helps you clean up and restructure Markdown notes from wherever your cursor already is. Use the command palette or assign hotkeys to remove outdated topics, stale examples, callouts, and quoted passages.
+Sectionals helps you clean up and organize Markdown notes from wherever your cursor already is. Use the command palette or assigned hotkeys to remove outdated material, move topics, or extract a section into its own linked note.
 
 ## Installation
 
@@ -18,9 +18,9 @@ Place the cursor inside the part of the note you want to change. Open the comman
 
 Movement commands carry the complete current topic and its nested subsections, along with the cursor.
 
-**Extract current section to linked note** moves the contents and nested subsections of the deepest section at the cursor. It keeps the source heading unchanged and leaves a paragraph beneath it linking to the new note. The new note goes to Obsidian's configured location for new notes. It starts with the original heading text as a level-one heading, and nested headings are shifted together to remain beneath it. If the note name is already in use, Sectionals tries numbered names such as `Name 1` and `Name 2`.
+**Extract current section to linked note** moves the current section's contents and nested subsections. It keeps the source heading unchanged and leaves a paragraph beneath it linking to the new note. The new note goes to Obsidian's configured location for new notes. It starts with the original heading text as a level-one heading, and nested headings are shifted together to remain beneath it. If the note name is already in use, Sectionals tries numbered names such as `Name 1` and `Name 2`.
 
-The command is available only when that deepest section has content and its heading is in the note itself. Headings inside blockquotes and callouts are not available. Relative Markdown links and embeds are rewritten to keep pointing to the same files. Extraction stops if one cannot be resolved, or if a reference link or footnote connects the moved section to text outside it. Links elsewhere in the vault to moved descendant headings or block IDs are not updated. Extraction does not replace the movement remembered by **Repeat last structural action**.
+The command checks only the deepest section at the cursor. It is unavailable if that section is empty or its heading is inside a blockquote or callout, and it does not fall back to an enclosing section. Relative Markdown links and embeds are rewritten to keep pointing to the same files. Extraction stops if one cannot be resolved, or if a reference link or footnote connects the moved section to text outside it. Links elsewhere in the vault to moved descendant headings or block IDs are not updated. Extraction does not replace the movement remembered by **Repeat last structural action**.
 
 > [!warning] Undo limitation
 > Native Undo restores the source content but does not delete the created note.
