@@ -14,6 +14,7 @@ export interface ReleaseFiles {
 
 const STABLE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const ARCHIVE_ENTRIES = ['main.js', 'manifest.json'] as const;
+const RELEASE_FILE_PATHS = ['CHANGELOG.md', 'manifest.json', 'package.json', 'versions.json'] as const;
 const JSON_INDENT = 2;
 const CLI_ARGUMENT_START_INDEX = 2;
 
@@ -26,6 +27,29 @@ export function assertArchiveEntries(entries: readonly string[]): void {
 export function assertReleaseBranch(branch: string): void {
   if (branch !== 'master') {
     throw new Error(`Release tags must be created from the master branch, received: ${branch || '<detached HEAD>'}`);
+  }
+}
+
+export function incrementStableVersion(version: string, bump: string): string {
+  assertStableVersion(version);
+  if (bump !== 'patch' && bump !== 'minor' && bump !== 'major') {
+    throw new Error(`Bump must be patch, minor, or major, received: ${bump}`);
+  }
+
+  const [major, minor, patch] = version.split('.').map(Number) as [number, number, number];
+  switch (bump) {
+    case 'major': {
+      return `${String(major + 1)}.0.0`;
+    }
+    case 'minor': {
+      return `${String(major)}.${String(minor + 1)}.0`;
+    }
+    case 'patch': {
+      return `${String(major)}.${String(minor)}.${String(patch + 1)}`;
+    }
+    default: {
+      throw new Error('Unsupported release bump');
+    }
   }
 }
 
@@ -122,6 +146,29 @@ function main(): void {
   const [command, argument] = process.argv.slice(CLI_ARGUMENT_START_INDEX);
 
   switch (command) {
+    case 'cut': {
+      const bump = requireArgument(argument, 'release.ts cut <patch|minor|major>');
+      assertCleanWorktree();
+      assertReleaseBranch(gitOutput(['branch', '--show-current']));
+
+      const files = readReleaseFiles();
+      const manifest = parseJsonRecord(files.manifest, 'manifest.json');
+      const currentVersion = manifest['version'];
+      if (typeof currentVersion !== 'string') {
+        throw new TypeError('manifest.json version must be a string');
+      }
+
+      const version = incrementStableVersion(currentVersion, bump);
+      assertTagDoesNotExist(version);
+      writeReleaseFiles(prepareReleaseFiles(files, version));
+      execFileSync('make', ['release', `VERSION=${version}`], { stdio: 'inherit' });
+      gitOutput(['add', ...RELEASE_FILE_PATHS]);
+      gitOutput(['commit', '-m', `chore: release ${version}`]);
+      assertCleanWorktree();
+      gitOutput(['tag', '-a', version, '-m', `Sectionals ${version}`]);
+      writeOutput(`Created release commit and tag ${version}. Push explicitly with: git push origin master ${version}`);
+      return;
+    }
     case 'prepare': {
       const version = requireArgument(argument, 'release.ts prepare <version>');
       assertCleanWorktree();
@@ -151,7 +198,7 @@ function main(): void {
       return;
     }
     default: {
-      throw new Error('Usage: release.ts <prepare|validate|pretag|verify-archive> <value>');
+      throw new Error('Usage: release.ts <cut|prepare|validate|pretag|verify-archive> <value>');
     }
   }
 }

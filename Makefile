@@ -18,7 +18,7 @@ ARTIFACTS := main.js manifest.json
 
 .PHONY: help install dev build typecheck lint format test test-watch check \
  validate-vault link symlink unlink reload prepare-release validate-release \
- release tag-release clean
+ release tag-release cut-release release-patch release-minor release-major clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*?## "; printf "Usage: make <target> [VAULT=/path/to/vault]\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -100,6 +100,19 @@ tag-release: ## Validate, build, and create an annotated stable tag
 	$(MAKE) release
 	git tag -a "$(VERSION)" -m "Sectionals $(VERSION)"
 	@echo "Created tag $(VERSION). Push explicitly with: git push origin master $(VERSION)"
+
+cut-release: ## Prepare, verify, commit, and tag the next release (requires BUMP=patch|minor|major)
+	test -n "$(BUMP)" || { echo "Usage: make cut-release BUMP=patch|minor|major"; exit 1; }
+	pnpm exec jiti scripts/release.ts cut $(BUMP)
+
+release-patch: BUMP := patch
+release-patch: cut-release ## Cut the next patch release locally
+
+release-minor: BUMP := minor
+release-minor: cut-release ## Cut the next minor release locally
+
+release-major: BUMP := major
+release-major: cut-release ## Cut the next major release locally
 
 clean: ## Remove generated build and release artifacts
 	rm -rf dist coverage
