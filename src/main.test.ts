@@ -7,9 +7,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionRange, DeletionTarget } from './deletion-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
+import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
 
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible main imports compact.
-import DeleteSectionsPlugin, { executeDeleteCommand, executeStructurePickerCommand } from './main.ts';
+import DeleteSectionsPlugin, {
+  checkAndExecuteStructuralAction,
+  executeDeleteCommand,
+  executeStructurePickerCommand
+} from './main.ts';
 
 interface EditorFixture {
   editor: SectionEditor;
@@ -40,12 +45,20 @@ function createEditor(source: string, cursorOffset: number): EditorFixture {
     return ch;
   }
 
-  const replaceRange = vi.fn();
+  let currentSource = source;
+  const replaceRange = vi.fn(
+    (replacement: string, from: EditorPosition, to?: EditorPosition) => {
+      const end = toOffset(to ?? from);
+      currentSource = currentSource.slice(0, toOffset(from))
+        + replacement
+        + currentSource.slice(end);
+    }
+  );
   const setCursor = vi.fn();
   return {
     editor: {
       getCursor: vi.fn(() => position(cursorOffset)),
-      getValue: vi.fn(() => source),
+      getValue: vi.fn(() => currentSource),
       offsetToPos: vi.fn(position),
       posToOffset: vi.fn(toOffset),
       replaceRange,
@@ -73,6 +86,121 @@ function loadPluginCommands(): PluginCommandsFixture {
 
   return { addCommand };
 }
+
+describe('checkAndExecuteStructuralAction', () => {
+  const action: StructuralAction = { kind: 'move-section', mode: 'up' };
+  const plan: StructuralEditPlan = {
+    action,
+    cursorOffset: 4,
+    range: { from: 0, to: 20 },
+    replacement: '## Beta\nb\n## Alpha\na\n'
+  };
+
+  it('reports a valid plan while checking without editing or remembering', () => {
+    const { editor, replaceRange, setCursor } = createEditor(
+      '## Alpha\na\n## Beta\nb\n',
+      4
+    );
+    const remember = vi.fn();
+    const planner = vi.fn(() => plan);
+
+    expect(
+      checkAndExecuteStructuralAction(
+        true,
+        editor,
+        action,
+        remember,
+        planner
+      )
+    ).toBe(true);
+    expect(editor.getCursor).toHaveBeenCalledWith('head');
+    expect(planner).toHaveBeenCalledWith(
+      '## Alpha\na\n## Beta\nb\n',
+      4,
+      action
+    );
+    expect(replaceRange).not.toHaveBeenCalled();
+    expect(setCursor).not.toHaveBeenCalled();
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('reports an unavailable action while checking a null plan', () => {
+    const { editor, replaceRange } = createEditor('## Alpha\na\n', 4);
+    const remember = vi.fn();
+
+    expect(
+      checkAndExecuteStructuralAction(true, editor, action, remember, () => null)
+    ).toBe(false);
+    expect(replaceRange).not.toHaveBeenCalled();
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when movement planning throws', () => {
+    const { editor, replaceRange, setCursor } = createEditor(
+      '## Alpha\na\n',
+      4
+    );
+    const remember = vi.fn();
+
+    expect(
+      checkAndExecuteStructuralAction(false, editor, action, remember, () => {
+        throw new Error('parse failed');
+      })
+    ).toBe(false);
+    expect(replaceRange).not.toHaveBeenCalled();
+    expect(setCursor).not.toHaveBeenCalled();
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('applies one planned replacement before mapping the cursor and remembering', () => {
+    const { editor, replaceRange, setCursor } = createEditor(
+      '## Alpha\na\n## Beta\nb\n',
+      4
+    );
+    const remember = vi.fn();
+
+    expect(
+      checkAndExecuteStructuralAction(false, editor, action, remember, () => plan)
+    ).toBe(true);
+    expect(replaceRange).toHaveBeenCalledOnce();
+    expect(replaceRange).toHaveBeenCalledWith(
+      plan.replacement,
+      { ch: 0, line: 0 },
+      { ch: 20, line: 0 }
+    );
+    expect(editor.offsetToPos).toHaveBeenNthCalledWith(3, plan.cursorOffset);
+    expect(setCursor).toHaveBeenCalledWith({ ch: 4, line: 0 });
+    expect(remember).toHaveBeenCalledOnce();
+    expect(remember).toHaveBeenCalledWith(plan.action);
+    expect(replaceRange.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(editor.offsetToPos).mock.invocationCallOrder[2] ?? 0
+    );
+    expect(vi.mocked(editor.offsetToPos).mock.invocationCallOrder[2]).toBeLessThan(
+      setCursor.mock.invocationCallOrder[0] ?? 0
+    );
+    expect(setCursor.mock.invocationCallOrder[0]).toBeLessThan(
+      remember.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  it('propagates editor mutation errors without remembering the action', () => {
+    const { editor, replaceRange, setCursor } = createEditor(
+      '## Alpha\na\n## Beta\nb\n',
+      4
+    );
+    const remember = vi.fn();
+    const mutationFailure = new Error('mutation failed');
+    replaceRange.mockImplementation(() => {
+      throw mutationFailure;
+    });
+
+    expect(() => {
+      checkAndExecuteStructuralAction(false, editor, action, remember, () => plan);
+    }).toThrow(mutationFailure);
+    expect(setCursor).not.toHaveBeenCalled();
+    expect(remember).not.toHaveBeenCalled();
+  });
+});
 
 describe('executeDeleteCommand', () => {
   it('applies exactly one replacement and places the cursor at its start', () => {
@@ -292,7 +420,7 @@ describe('DeleteSectionsPlugin', () => {
   it('registers exact editor-only command metadata without hotkeys', () => {
     const { addCommand } = loadPluginCommands();
 
-    expect(addCommand).toHaveBeenCalledTimes(6);
+    expect(addCommand).toHaveBeenCalledTimes(11);
     expect(
       addCommand.mock.calls.map(([command]) => ({
         callback: command.callback,
@@ -350,8 +478,250 @@ describe('DeleteSectionsPlugin', () => {
         hotkeys: undefined,
         id: 'delete-current-structure',
         name: 'Delete current structure…'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'move-current-section-up',
+        name: 'Move current section up'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'move-current-section-down',
+        name: 'Move current section down'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'move-current-section-to-start',
+        name: 'Move current section to start'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'move-current-section-to-end',
+        name: 'Move current section to end'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'repeat-last-structural-action',
+        name: 'Repeat last structural action'
       }
     ]);
+  });
+
+  it('repeats a successful movement mode against another editor source', () => {
+    const { addCommand } = loadPluginCommands();
+    const commands = new Map(
+      addCommand.mock.calls.map(([command]) => [command.id, command])
+    );
+    const view = {} as MarkdownView;
+    const firstSource = '## Alpha\na\n## Beta\nb\n';
+    const first = createEditor(firstSource, firstSource.indexOf('\na\n') + 1);
+    const secondSource = '## One\none\n## Two\ntwo\n';
+    const second = createEditor(secondSource, secondSource.indexOf('one'));
+
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        first.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(first.editor.getValue()).toBe('## Beta\nb\n## Alpha\na\n');
+
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        second.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(second.replaceRange).toHaveBeenCalledOnce();
+    expect(second.replaceRange).toHaveBeenCalledWith(
+      '## Two\ntwo\n## One\none\n',
+      { ch: 0, line: 0 },
+      { ch: secondSource.length, line: 0 }
+    );
+    expect(second.editor.getValue()).toBe('## Two\ntwo\n## One\none\n');
+  });
+
+  it('does not offer repeat before a movement succeeds', () => {
+    const { addCommand } = loadPluginCommands();
+    const commands = new Map(
+      addCommand.mock.calls.map(([command]) => [command.id, command])
+    );
+    const source = '## Alpha\na\n## Beta\nb\n';
+    const fixture = createEditor(source, source.indexOf('\na\n') + 1);
+
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        true,
+        fixture.editor as Editor,
+        {} as MarkdownView
+      )
+    ).toBe(false);
+    expect(fixture.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('does not remember a movement availability check', () => {
+    const { addCommand } = loadPluginCommands();
+    const commands = new Map(
+      addCommand.mock.calls.map(([command]) => [command.id, command])
+    );
+    const source = '## Alpha\na\n## Beta\nb\n';
+    const fixture = createEditor(source, source.indexOf('\na\n') + 1);
+    const view = {} as MarkdownView;
+
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        true,
+        fixture.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        true,
+        fixture.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(fixture.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('keeps the remembered movement when another execution is unavailable', () => {
+    const { addCommand } = loadPluginCommands();
+    const commands = new Map(
+      addCommand.mock.calls.map(([command]) => [command.id, command])
+    );
+    const view = {} as MarkdownView;
+    const rememberedSource = '## Alpha\na\n## Beta\nb\n';
+    const remembered = createEditor(
+      rememberedSource,
+      rememberedSource.indexOf('\na\n') + 1
+    );
+    const unavailableSource = '## First\none\n## Second\ntwo\n';
+    const unavailable = createEditor(
+      unavailableSource,
+      unavailableSource.indexOf('one')
+    );
+    const repeatedSource = '## Left\nleft\n## Right\nright\n';
+    const repeated = createEditor(
+      repeatedSource,
+      repeatedSource.indexOf('left')
+    );
+
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        remembered.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('move-current-section-up')?.editorCheckCallback?.(
+        false,
+        unavailable.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(unavailable.replaceRange).not.toHaveBeenCalled();
+
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeated.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeated.editor.getValue()).toBe(
+      '## Right\nright\n## Left\nleft\n'
+    );
+  });
+
+  it('keeps a successful repeated action available for another editor', () => {
+    const { addCommand } = loadPluginCommands();
+    const commands = new Map(
+      addCommand.mock.calls.map(([command]) => [command.id, command])
+    );
+    const view = {} as MarkdownView;
+    const sources = [
+      '## Alpha\na\n## Beta\nb\n',
+      '## One\none\n## Two\ntwo\n',
+      '## Left\nleft\n## Right\nright\n'
+    ] as const;
+    const editors = sources.map((source) => createEditor(source, source.indexOf('\n') + 1));
+
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        editors[0]?.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        editors[1]?.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        editors[2]?.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(editors[1]?.replaceRange).toHaveBeenCalledOnce();
+    expect(editors[2]?.replaceRange).toHaveBeenCalledOnce();
+  });
+
+  it('does not offer repeat when the remembered movement has no destination', () => {
+    const { addCommand } = loadPluginCommands();
+    const commands = new Map(
+      addCommand.mock.calls.map(([command]) => [command.id, command])
+    );
+    const view = {} as MarkdownView;
+    const rememberedSource = '## Alpha\na\n## Beta\nb\n';
+    const remembered = createEditor(
+      rememberedSource,
+      rememberedSource.indexOf('\na\n') + 1
+    );
+    const unavailableSource = '## One\none\n## Two\ntwo\n';
+    const unavailable = createEditor(
+      unavailableSource,
+      unavailableSource.indexOf('two')
+    );
+
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        remembered.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        true,
+        unavailable.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(unavailable.replaceRange).not.toHaveBeenCalled();
   });
 
   it('presents contextual commands only for matching cursor targets', () => {

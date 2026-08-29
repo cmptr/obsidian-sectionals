@@ -7,10 +7,13 @@ import { Notice, Plugin } from 'obsidian';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionMode, DeletionRange, DeletionTarget } from './deletion-planner.ts';
 import type { MarkdownBlockKind } from './markdown-structure.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
+import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
 import { openDeletionTargetPicker } from './deletion-target-modal.ts';
+import { planSectionMovement } from './section-movement-planner.ts';
 
 export const NO_TARGET_NOTICE = 'No containing heading found.';
 export const PARSE_FAILURE_NOTICE = 'Unable to determine the section to delete.';
@@ -49,6 +52,11 @@ type SectionEditor = Pick<
   | 'replaceRange'
   | 'setCursor'
 >;
+type StructuralActionPlanner = (
+  source: string,
+  cursorOffset: number,
+  action: StructuralAction
+) => null | StructuralEditPlan;
 type StructureTargetCollector = (
   source: string,
   cursorOffset: number
@@ -66,6 +74,29 @@ const COMMANDS: readonly DeleteCommand[] = [
     name: 'Delete current heading block'
   }
 ];
+
+const MOVEMENT_COMMANDS = [
+  {
+    id: 'move-current-section-up',
+    mode: 'up',
+    name: 'Move current section up'
+  },
+  {
+    id: 'move-current-section-down',
+    mode: 'down',
+    name: 'Move current section down'
+  },
+  {
+    id: 'move-current-section-to-start',
+    mode: 'start',
+    name: 'Move current section to start'
+  },
+  {
+    id: 'move-current-section-to-end',
+    mode: 'end',
+    name: 'Move current section to end'
+  }
+] as const;
 
 const CONTEXTUAL_COMMANDS: readonly ContextualDeleteCommand[] = [
   {
@@ -86,6 +117,8 @@ const CONTEXTUAL_COMMANDS: readonly ContextualDeleteCommand[] = [
 ];
 
 export default class DeleteSectionsPlugin extends Plugin {
+  private lastStructuralAction: null | StructuralAction = null;
+
   public override onload(): void {
     for (const command of COMMANDS) {
       this.addCommand({
@@ -123,7 +156,72 @@ export default class DeleteSectionsPlugin extends Plugin {
       id: 'delete-current-structure',
       name: 'Delete current structure…'
     });
+
+    for (const command of MOVEMENT_COMMANDS) {
+      this.addCommand({
+        editorCheckCallback: (isChecking, editor) => {
+          const action: StructuralAction = {
+            kind: 'move-section',
+            mode: command.mode
+          };
+          return checkAndExecuteStructuralAction(
+            isChecking,
+            editor,
+            action,
+            (successfulAction) => {
+              this.lastStructuralAction = successfulAction;
+            }
+          );
+        },
+        id: command.id,
+        name: command.name
+      });
+    }
+
+    this.addCommand({
+      editorCheckCallback: (isChecking, editor) => {
+        const action = this.lastStructuralAction;
+        if (action === null) {
+          return false;
+        }
+        return checkAndExecuteStructuralAction(
+          isChecking,
+          editor,
+          action,
+          (successfulAction) => {
+            this.lastStructuralAction = successfulAction;
+          }
+        );
+      },
+      id: 'repeat-last-structural-action',
+      name: 'Repeat last structural action'
+    });
   }
+}
+
+export function checkAndExecuteStructuralAction(
+  isChecking: boolean,
+  editor: SectionEditor,
+  action: StructuralAction,
+  remember: (action: StructuralAction) => void,
+  planner: StructuralActionPlanner = planSectionMovement
+): boolean {
+  const source = editor.getValue();
+  const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+  let plan: null | StructuralEditPlan;
+  try {
+    plan = planner(source, cursorOffset, action);
+  } catch {
+    return false;
+  }
+  if (plan === null) {
+    return false;
+  }
+  if (!isChecking) {
+    applyStructuralEditPlan(editor, plan);
+    remember(plan.action);
+  }
+  return true;
 }
 
 export function executeDeleteCommand(
@@ -185,6 +283,16 @@ function applyDeletionRange(editor: SectionEditor, range: DeletionRange): void {
   const to = editor.offsetToPos(range.to);
   editor.replaceRange('', from, to);
   editor.setCursor(from);
+}
+
+function applyStructuralEditPlan(
+  editor: SectionEditor,
+  plan: StructuralEditPlan
+): void {
+  const from = editor.offsetToPos(plan.range.from);
+  const to = editor.offsetToPos(plan.range.to);
+  editor.replaceRange(plan.replacement, from, to);
+  editor.setCursor(editor.offsetToPos(plan.cursorOffset));
 }
 
 function checkAndExecuteContextualDeleteCommand(
