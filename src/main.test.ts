@@ -1,19 +1,28 @@
+/* eslint-disable perfectionist/sort-modules -- Keep tests grouped by production behavior and established command order. */
+
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
 import type { App, Command, Editor, EditorPosition, MarkdownView, PluginManifest } from 'obsidian';
 import type { MockInstance } from 'vitest';
 
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
+import { TFile as PublicTFile, TFolder as PublicTFolder } from 'obsidian';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian test imports compact.
+import { App as ObsidianApp, TFile, TFolder } from 'obsidian-test-mocks/obsidian';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it, vi } from 'vitest';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionRange, DeletionTarget } from './deletion-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible executor imports compact.
+import type { ExtractionNoticeDetails, ExtractionRuntime } from './section-extraction-executor.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
 import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
 
-import DeleteSectionsPlugin, {
+import SectionalsPlugin, {
   checkAndExecuteStructuralAction,
   executeDeleteCommand,
-  executeStructurePickerCommand
+  executeStructurePickerCommand,
+  formatExtractionNotice
 } from './main.ts';
 
 interface EditorFixture {
@@ -24,6 +33,17 @@ interface EditorFixture {
 
 interface PluginCommandsFixture {
   addCommand: MockInstance<(command: Command) => Command>;
+}
+
+interface TestExtractionDependencies {
+  execute(
+    editor: SectionEditor,
+    sourcePath: string,
+    runtime: ExtractionRuntime<PublicTFile>,
+    notify: (details: ExtractionNoticeDetails) => void
+  ): Promise<boolean>;
+  notify(message: string): void;
+  observeExecution(execution: Promise<void>): void;
 }
 
 type SectionEditor = Pick<
@@ -69,7 +89,18 @@ function createEditor(source: string, cursorOffset: number): EditorFixture {
   };
 }
 
-function loadPluginCommands(): PluginCommandsFixture {
+function asApp(value: unknown): App {
+  return value as App;
+}
+
+function createMarkdownView(file: PublicTFile): MarkdownView {
+  return { file } as MarkdownView;
+}
+
+function loadPluginCommands(
+  app: App = {} as App,
+  extractionDependencies?: TestExtractionDependencies
+): PluginCommandsFixture {
   const manifest: PluginManifest = {
     author: 'Aaron Bell',
     description: 'Delete the Markdown section containing the cursor.',
@@ -79,12 +110,24 @@ function loadPluginCommands(): PluginCommandsFixture {
     name: 'Sectionals',
     version: '0.1.0'
   };
-  const plugin = new DeleteSectionsPlugin({} as App, manifest);
+  const plugin = new SectionalsPlugin(
+    app,
+    manifest,
+    extractionDependencies
+  );
   const addCommand = vi.spyOn(plugin, 'addCommand');
 
   plugin.onload();
 
   return { addCommand };
+}
+
+function getRegisteredCommands(
+  fixture: PluginCommandsFixture
+): ReadonlyMap<string, Command> {
+  return new Map(
+    fixture.addCommand.mock.calls.map(([command]) => [command.id, command])
+  );
 }
 
 describe('checkAndExecuteStructuralAction', () => {
@@ -416,11 +459,11 @@ describe('executeStructurePickerCommand', () => {
   });
 });
 
-describe('DeleteSectionsPlugin', () => {
+describe('SectionalsPlugin', () => {
   it('registers exact editor-only command metadata without hotkeys', () => {
     const { addCommand } = loadPluginCommands();
 
-    expect(addCommand).toHaveBeenCalledTimes(11);
+    expect(addCommand).toHaveBeenCalledTimes(12);
     expect(
       addCommand.mock.calls.map(([command]) => ({
         callback: command.callback,
@@ -518,8 +561,515 @@ describe('DeleteSectionsPlugin', () => {
         hotkeys: undefined,
         id: 'repeat-last-structural-action',
         name: 'Repeat last structural action'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'extract-current-section-to-linked-note',
+        name: 'Extract current section to linked note'
       }
     ]);
+  });
+
+  it('checks extraction availability from the current editor and source file without side effects', () => {
+    const getNewFileParent = vi.fn();
+    const getFirstLinkpathDestination = vi.fn();
+    const fileToLinktext = vi.fn();
+    const create = vi.fn();
+    const read = vi.fn();
+    const deleteFile = vi.fn();
+    const getAbstractFileByPath = vi.fn();
+    const app = asApp({
+      fileManager: { getNewFileParent },
+      metadataCache: {
+        fileToLinktext,
+        // eslint-disable-next-line unicorn/name-replacements -- Obsidian public API name.
+        getFirstLinkpathDest: getFirstLinkpathDestination
+      },
+      vault: {
+        create,
+        delete: deleteFile,
+        getAbstractFileByPath,
+        read
+      }
+    });
+    const execute = vi.fn(() => Promise.resolve(true));
+    const notify = vi.fn();
+    const observeExecution = vi.fn();
+    const commands = getRegisteredCommands(
+      loadPluginCommands(app, { execute, notify, observeExecution })
+    );
+    const extraction = commands.get(
+      'extract-current-section-to-linked-note'
+    );
+    const unavailable = createEditor('plain text\n', 2);
+    const readySource = '# Extract me\nbody\n';
+    const ready = createEditor(readySource, readySource.indexOf('body'));
+    const invalidSource = '# Extract me\nbody[^outside]\n# Keep\n[^outside]: note\n';
+    const invalid = createEditor(
+      invalidSource,
+      invalidSource.indexOf('body')
+    );
+
+    expect(
+      extraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        { file: null } as MarkdownView
+      )
+    ).toBe(false);
+    expect(
+      extraction?.editorCheckCallback?.(
+        true,
+        unavailable.editor as Editor,
+        { file: { path: 'Notes/source.md' } } as MarkdownView
+      )
+    ).toBe(false);
+    expect(
+      extraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        { file: { path: 'Notes/source.md' } } as MarkdownView
+      )
+    ).toBe(true);
+    expect(
+      extraction?.editorCheckCallback?.(
+        true,
+        invalid.editor as Editor,
+        { file: { path: 'Notes/source.md' } } as MarkdownView
+      )
+    ).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+    expect(observeExecution).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(getNewFileParent).not.toHaveBeenCalled();
+    expect(getFirstLinkpathDestination).not.toHaveBeenCalled();
+    expect(fileToLinktext).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(getAbstractFileByPath).not.toHaveBeenCalled();
+  });
+
+  it('starts one extraction asynchronously and returns before it settles', async () => {
+    let finishExecution: ((isSuccessful: boolean) => void) | undefined;
+    const execute = vi.fn(
+      (
+        _editor: SectionEditor,
+        _sourcePath: string,
+        _runtime: ExtractionRuntime<PublicTFile>,
+        _notify: (details: ExtractionNoticeDetails) => void
+      ) =>
+        new Promise<boolean>((resolve) => {
+          finishExecution = resolve;
+        })
+    );
+    const notify = vi.fn();
+    let completion: Promise<void> | undefined;
+    const observeExecution = vi.fn((execution: Promise<void>) => {
+      completion = execution;
+    });
+    const commands = getRegisteredCommands(
+      loadPluginCommands({} as App, { execute, notify, observeExecution })
+    );
+    const source = '# Extract me\nbody\n';
+    const fixture = createEditor(source, source.indexOf('body'));
+
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          { file: { path: 'Notes/source.md' } } as MarkdownView
+        )
+    ).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[0]).toBe(fixture.editor);
+    expect(execute.mock.calls[0]?.[1]).toBe('Notes/source.md');
+    expect(observeExecution).toHaveBeenCalledOnce();
+    expect(completion).toBeInstanceOf(Promise);
+    expect(notify).not.toHaveBeenCalled();
+
+    finishExecution?.(true);
+    await completion;
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('adapts extraction to normalized public Obsidian file APIs and concrete file types', async () => {
+    const app = ObsidianApp.createConfigured__({
+      files: {
+        'Extracted/': '',
+        'Extracted/existing.md': 'existing',
+        'Folder/source.md': '# Extract me\nbody\n',
+        'Links/target.md': 'target'
+      }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    const targetFile = app.vault.getAbstractFileByPath('Links/target.md');
+    const destinationFolder = app.vault.getAbstractFileByPath('Extracted');
+    if (
+      !(sourceFile instanceof PublicTFile)
+      || !(sourceFile instanceof TFile)
+      || !(targetFile instanceof PublicTFile)
+      || !(targetFile instanceof TFile)
+    ) {
+      throw new TypeError('Expected source and target files in the fake vault.');
+    }
+    if (
+      !(destinationFolder instanceof PublicTFolder)
+      || !(destinationFolder instanceof TFolder)
+    ) {
+      throw new TypeError('Expected the destination folder in the fake vault.');
+    }
+    const getNewFileParent = vi.spyOn(app.fileManager, 'getNewFileParent')
+      .mockReturnValue(destinationFolder);
+    const getFirstLinkpathDestination = vi.spyOn(
+      app.metadataCache,
+      'getFirstLinkpathDest'
+    ).mockReturnValue(targetFile);
+    const fileToLinktext = vi.spyOn(app.metadataCache, 'fileToLinktext')
+      .mockReturnValue('target');
+    const getAbstractFileByPath = vi.spyOn(
+      app.vault,
+      'getAbstractFileByPath'
+    );
+    const create = vi.spyOn(app.vault, 'create');
+    const read = vi.spyOn(app.vault, 'read');
+    const deleteFile = vi.spyOn(app.vault, 'delete');
+    const execute = vi.fn(
+      async (
+        _editor: SectionEditor,
+        _sourcePath: string,
+        runtime: ExtractionRuntime<PublicTFile>
+      ) => {
+        expect(
+          runtime.getNewFileParent('Folder//source.md', 'Extract me.md')
+        ).toBe(destinationFolder);
+        expect(runtime.fileExists('Extracted//existing.md')).toBe(true);
+        expect(runtime.fileExists('Extracted')).toBe(true);
+        expect(runtime.fileExists('Extracted//missing.md')).toBe(false);
+        expect(
+          runtime.resolveLink('../Links/target', 'Folder//source.md')
+        ).toBe(targetFile);
+        expect(
+          runtime.getLinktext(targetFile, 'Folder//source.md')
+        ).toBe('target');
+        const created = await runtime.create(
+          'Extracted//created.md',
+          'created'
+        );
+        expect(created).toBeInstanceOf(TFile);
+        expect(await runtime.read(created)).toBe('created');
+        await runtime.delete(created);
+        return true;
+      }
+    );
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands(asApp(app), {
+        execute,
+        notify: vi.fn(),
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+    const source = '# Extract me\nbody\n';
+    const fixture = createEditor(source, source.indexOf('body'));
+
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          createMarkdownView(sourceFile)
+        )
+    ).toBe(true);
+    await completion;
+
+    expect(getNewFileParent).toHaveBeenCalledWith(
+      'Folder/source.md',
+      'Extract me.md'
+    );
+    expect(getAbstractFileByPath).toHaveBeenCalledWith(
+      'Extracted/existing.md'
+    );
+    expect(getAbstractFileByPath).toHaveBeenCalledWith('Extracted');
+    expect(getAbstractFileByPath).toHaveBeenCalledWith(
+      'Extracted/missing.md'
+    );
+    expect(getFirstLinkpathDestination).toHaveBeenCalledWith(
+      '../Links/target',
+      'Folder/source.md'
+    );
+    expect(fileToLinktext).toHaveBeenCalledWith(
+      targetFile,
+      'Folder/source.md',
+      true
+    );
+    expect(create).toHaveBeenCalledWith(
+      'Extracted/created.md',
+      'created'
+    );
+    expect(read).toHaveBeenCalledWith(expect.any(PublicTFile));
+    expect(deleteFile).toHaveBeenCalledWith(expect.any(PublicTFile));
+    expect(app.vault.getAbstractFileByPath('Extracted/created.md')).toBeNull();
+  });
+
+  it.each(
+    [
+      [
+        { kind: 'create-failed' },
+        'Unable to create the extracted note.'
+      ],
+      [
+        { kind: 'cross-boundary-reference' },
+        'The section has a reference or footnote outside its boundaries.'
+      ],
+      [
+        { kind: 'destination-changed', path: 'Extracted/Topic.md' },
+        'Extraction stopped because the new note changed: Extracted/Topic.md'
+      ],
+      [
+        {
+          kind: 'indeterminate-source-mutation',
+          path: 'Extracted/Topic.md'
+        },
+        'The source changed unexpectedly; the extracted note was kept: Extracted/Topic.md'
+      ],
+      [
+        { kind: 'rollback-failed', path: 'Extracted/Topic.md' },
+        'Extraction stopped, but the new note could not be removed: Extracted/Topic.md'
+      ],
+      [
+        { kind: 'source-changed' },
+        'The source note changed; extraction was cancelled.'
+      ],
+      [
+        { kind: 'source-edit-failed' },
+        'Unable to replace the source section.'
+      ],
+      [
+        { kind: 'unresolved-relative-link' },
+        'The section contains a relative link or embed that could not be resolved.'
+      ],
+      [
+        { kind: 'unusable-title' },
+        'Rename the heading before extracting it.'
+      ]
+    ] as const
+  )(
+    'shows the practical extraction notice for %s',
+    async (details, expectedNotice) => {
+      const notify = vi.fn();
+      let completion: Promise<void> | undefined;
+      const execute = vi.fn(
+        (
+          _editor: SectionEditor,
+          _sourcePath: string,
+          _runtime: ExtractionRuntime<PublicTFile>,
+          report: (notice: ExtractionNoticeDetails) => void
+        ) => {
+          report(details);
+          return Promise.resolve(true);
+        }
+      );
+      const commands = getRegisteredCommands(
+        loadPluginCommands({} as App, {
+          execute,
+          notify,
+          observeExecution(execution) {
+            completion = execution;
+          }
+        })
+      );
+      const source = '# Extract me\nbody\n';
+      const fixture = createEditor(source, source.indexOf('body'));
+
+      expect(
+        commands.get('extract-current-section-to-linked-note')
+          ?.editorCheckCallback?.(
+            false,
+            fixture.editor as Editor,
+            { file: { path: 'Notes/source.md' } } as MarkdownView
+          )
+      ).toBe(true);
+      await completion;
+
+      expect(notify).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledWith(expectedNotice);
+    }
+  );
+
+  it('requires a retained path when formatting path-bearing notices', () => {
+    expect(() => {
+      formatExtractionNotice({ kind: 'destination-changed' });
+    }).toThrow(TypeError);
+    expect(() => {
+      formatExtractionNotice({ kind: 'indeterminate-source-mutation' });
+    }).toThrow(TypeError);
+    expect(() => {
+      formatExtractionNotice({ kind: 'rollback-failed' });
+    }).toThrow(TypeError);
+  });
+
+  it('maps an unexpected async extraction failure once at the command boundary', async () => {
+    const notify = vi.fn();
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands({} as App, {
+        execute: vi.fn(() => Promise.reject(new Error('unexpected failure'))),
+        notify,
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+    const source = '# Extract me\nbody\n';
+    const fixture = createEditor(source, source.indexOf('body'));
+
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          { file: { path: 'Notes/source.md' } } as MarkdownView
+        )
+    ).toBe(true);
+    await completion;
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(
+      'Unable to create the extracted note.'
+    );
+  });
+
+  it('does not duplicate a notice when the executor later fails', async () => {
+    const notify = vi.fn();
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands({} as App, {
+        execute: vi.fn(
+          (
+            _editor: SectionEditor,
+            _sourcePath: string,
+            _runtime: ExtractionRuntime<PublicTFile>,
+            report: (notice: ExtractionNoticeDetails) => void
+          ) => {
+            report({ kind: 'source-changed' });
+            return Promise.reject(new Error('failure after notice'));
+          }
+        ),
+        notify,
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+    const source = '# Extract me\nbody\n';
+    const fixture = createEditor(source, source.indexOf('body'));
+
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          { file: { path: 'Notes/source.md' } } as MarkdownView
+        )
+    ).toBe(true);
+    await completion;
+
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(
+      'The source note changed; extraction was cancelled.'
+    );
+  });
+
+  it('keeps successful extraction quiet', async () => {
+    const notify = vi.fn();
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands({} as App, {
+        execute: vi.fn(() => Promise.resolve(true)),
+        notify,
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+    const source = '# Extract me\nbody\n';
+    const fixture = createEditor(source, source.indexOf('body'));
+
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          { file: { path: 'Notes/source.md' } } as MarkdownView
+        )
+    ).toBe(true);
+    await completion;
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('keeps the previous movement as the repeat action after extraction', async () => {
+    let completion: Promise<void> | undefined;
+    const execute = vi.fn(() => Promise.resolve(true));
+    const commands = getRegisteredCommands(
+      loadPluginCommands({} as App, {
+        execute,
+        notify: vi.fn(),
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+    const view = {} as MarkdownView;
+    const rememberedSource = '## Alpha\na\n## Beta\nb\n';
+    const remembered = createEditor(
+      rememberedSource,
+      rememberedSource.indexOf('\na\n') + 1
+    );
+    const extractionSource = '# Extract me\nbody\n';
+    const extraction = createEditor(
+      extractionSource,
+      extractionSource.indexOf('body')
+    );
+    const repeatedSource = '## One\none\n## Two\ntwo\n';
+    const repeated = createEditor(
+      repeatedSource,
+      repeatedSource.indexOf('one')
+    );
+
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        remembered.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          extraction.editor as Editor,
+          { file: { path: 'Notes/source.md' } } as MarkdownView
+        )
+    ).toBe(true);
+    await completion;
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeated.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeated.editor.getValue()).toBe(
+      '## Two\ntwo\n## One\none\n'
+    );
   });
 
   it('repeats a successful movement mode against another editor source', () => {
@@ -823,3 +1373,5 @@ describe('DeleteSectionsPlugin', () => {
     );
   });
 });
+
+/* eslint-enable perfectionist/sort-modules -- Test module definitions are complete. */

@@ -1,18 +1,24 @@
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
-import type { App, Editor } from 'obsidian';
+/* eslint-disable perfectionist/sort-modules -- Keep public command contracts and helpers near their existing consumers. */
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
-import { Notice, Plugin } from 'obsidian';
+import type { App, Editor, PluginManifest } from 'obsidian';
+
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
+import { normalizePath, Notice, Plugin, TFile, TFolder } from 'obsidian';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionMode, DeletionRange, DeletionTarget } from './deletion-planner.ts';
 import type { MarkdownBlockKind } from './markdown-structure.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible executor imports compact.
+import type { ExtractionEditor, ExtractionNoticeDetails, ExtractionRuntime } from './section-extraction-executor.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
 import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
 import { openDeletionTargetPicker } from './deletion-target-modal.ts';
+import { executeSectionExtraction } from './section-extraction-executor.ts';
+import { planSectionExtraction } from './section-extraction-planner.ts';
 import { planSectionMovement } from './section-movement-planner.ts';
 
 export const NO_TARGET_NOTICE = 'No containing heading found.';
@@ -20,6 +26,17 @@ export const PARSE_FAILURE_NOTICE = 'Unable to determine the section to delete.'
 export const NO_STRUCTURE_TARGET_NOTICE = 'No deletable structure found.';
 export const STALE_STRUCTURE_TARGET_NOTICE = 'Note changed; reopen the structure picker.';
 export const STRUCTURE_PARSE_FAILURE_NOTICE = 'Unable to determine structures to delete.';
+export const EXTRACTION_NOTICES = {
+  'create-failed': 'Unable to create the extracted note.',
+  'cross-boundary-reference': 'The section has a reference or footnote outside its boundaries.',
+  'destination-changed': 'Extraction stopped because the new note changed: {path}',
+  'indeterminate-source-mutation': 'The source changed unexpectedly; the extracted note was kept: {path}',
+  'rollback-failed': 'Extraction stopped, but the new note could not be removed: {path}',
+  'source-changed': 'The source note changed; extraction was cancelled.',
+  'source-edit-failed': 'Unable to replace the source section.',
+  'unresolved-relative-link': 'The section contains a relative link or embed that could not be resolved.',
+  'unusable-title': 'Rename the heading before extracting it.'
+} as const;
 
 interface ContextualDeleteCommand {
   readonly id: string;
@@ -61,8 +78,28 @@ type StructureTargetCollector = (
   source: string,
   cursorOffset: number
 ) => readonly DeletionTarget[];
+export interface ExtractionCommandDependencies {
+  execute(
+    editor: ExtractionEditor,
+    sourcePath: string,
+    runtime: ExtractionRuntime<TFile>,
+    notify: (details: ExtractionNoticeDetails) => void
+  ): Promise<boolean>;
+  notify(message: string): void;
+  observeExecution(execution: Promise<void>): void;
+}
 
-const COMMANDS: readonly DeleteCommand[] = [
+const DEFAULT_EXTRACTION_COMMAND_DEPENDENCIES: ExtractionCommandDependencies = {
+  execute: executeSectionExtraction,
+  notify(message) {
+    new Notice(message);
+  },
+  observeExecution(execution) {
+    execution.catch(() => undefined);
+  }
+};
+
+const DELETION_COMMANDS: readonly DeleteCommand[] = [
   {
     id: 'delete-current-section',
     mode: 'section',
@@ -116,11 +153,21 @@ const CONTEXTUAL_COMMANDS: readonly ContextualDeleteCommand[] = [
   }
 ];
 
-export default class DeleteSectionsPlugin extends Plugin {
+export default class SectionalsPlugin extends Plugin {
+  private readonly extractionDependencies: ExtractionCommandDependencies;
   private lastStructuralAction: null | StructuralAction = null;
 
+  public constructor(
+    app: App,
+    manifest: PluginManifest,
+    extractionDependencies: ExtractionCommandDependencies = DEFAULT_EXTRACTION_COMMAND_DEPENDENCIES
+  ) {
+    super(app, manifest);
+    this.extractionDependencies = extractionDependencies;
+  }
+
   public override onload(): void {
-    for (const command of COMMANDS) {
+    for (const command of DELETION_COMMANDS) {
       this.addCommand({
         editorCallback: (editor) => {
           executeDeleteCommand(editor, command.mode, (message) => {
@@ -196,6 +243,131 @@ export default class DeleteSectionsPlugin extends Plugin {
       id: 'repeat-last-structural-action',
       name: 'Repeat last structural action'
     });
+
+    this.addCommand({
+      editorCheckCallback: (isChecking, editor, context) => {
+        const sourceFile = context.file;
+        if (sourceFile === null) {
+          return false;
+        }
+        const source = editor.getValue();
+        const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+        try {
+          if (planSectionExtraction(source, cursorOffset).kind === 'unavailable') {
+            return false;
+          }
+        } catch {
+          return false;
+        }
+        if (!isChecking) {
+          const execution = runExtractionCommand(
+            editor,
+            normalizePath(sourceFile.path),
+            createExtractionRuntime(this.app),
+            this.extractionDependencies
+          );
+          this.extractionDependencies.observeExecution(execution);
+        }
+        return true;
+      },
+      id: 'extract-current-section-to-linked-note',
+      name: 'Extract current section to linked note'
+    });
+  }
+}
+
+export function formatExtractionNotice(
+  details: ExtractionNoticeDetails
+): string {
+  const template = EXTRACTION_NOTICES[details.kind];
+  if (!template.includes('{path}')) {
+    return template;
+  }
+  if (details.path === undefined) {
+    throw new TypeError('A retained extraction path is required.');
+  }
+  const retainedPath = details.path;
+  return template.replace('{path}', () => retainedPath);
+}
+
+function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
+  return {
+    async create(path, content): Promise<TFile> {
+      const file = await app.vault.create(normalizePath(path), content);
+      if (!(file instanceof TFile)) {
+        throw new TypeError('Expected Vault.create() to return a file.');
+      }
+      return file;
+    },
+    delete(file): Promise<void> {
+      return app.vault.delete(file);
+    },
+    fileExists(path): boolean {
+      const abstractFile = app.vault.getAbstractFileByPath(normalizePath(path));
+      if (abstractFile === null) {
+        return false;
+      }
+      if (abstractFile instanceof TFile || abstractFile instanceof TFolder) {
+        return true;
+      }
+      throw new TypeError('Expected a vault file or folder.');
+    },
+    getLinktext(file, sourcePath): string {
+      return app.metadataCache.fileToLinktext(
+        file,
+        normalizePath(sourcePath),
+        true
+      );
+    },
+    getNewFileParent(sourcePath, candidateFilename): TFolder {
+      const parent = app.fileManager.getNewFileParent(
+        normalizePath(sourcePath),
+        normalizePath(candidateFilename)
+      );
+      if (!(parent instanceof TFolder)) {
+        throw new TypeError('Expected the new-file parent to be a folder.');
+      }
+      return parent;
+    },
+    read(file): Promise<string> {
+      return app.vault.read(file);
+    },
+    resolveLink(linkpath, sourcePath): null | TFile {
+      const file = app.metadataCache.getFirstLinkpathDest(
+        linkpath,
+        normalizePath(sourcePath)
+      );
+      return file instanceof TFile ? file : null;
+    }
+  };
+}
+
+async function runExtractionCommand(
+  editor: ExtractionEditor,
+  sourcePath: string,
+  runtime: ExtractionRuntime<TFile>,
+  dependencies: ExtractionCommandDependencies
+): Promise<void> {
+  const notificationState = { didNotify: false };
+  try {
+    await dependencies.execute(
+      editor,
+      sourcePath,
+      runtime,
+      (details) => {
+        const message = formatExtractionNotice(details);
+        notificationState.didNotify = true;
+        dependencies.notify(message);
+      }
+    );
+  } catch {
+    if (!notificationState.didNotify) {
+      try {
+        dependencies.notify(EXTRACTION_NOTICES['create-failed']);
+      } catch {
+        // Notice failures must not become unhandled command rejections.
+      }
+    }
   }
 }
 
@@ -324,3 +496,5 @@ function resolveDeletionRange<Mode extends string>(
   const cursorOffset = editor.posToOffset(editor.getCursor('head'));
   return planner(source, cursorOffset, mode);
 }
+
+/* eslint-enable perfectionist/sort-modules -- Main module definitions are complete. */
