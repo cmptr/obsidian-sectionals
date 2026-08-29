@@ -323,17 +323,17 @@ async function runPostCreateIdentityMutation(
       return created;
     }
   );
-  const deleteFile = vi.spyOn(harness.app.vault, 'delete');
+  const trashFile = vi.spyOn(harness.app.fileManager, 'trashFile');
   beforeExtraction?.(harness);
 
   await invokeIdentityExtraction(harness);
 
-  const destination = deleteFile.mock.calls.find(
+  const destination = trashFile.mock.calls.find(
     ([file]) => file.path === IDENTITY_DESTINATION_PATH
   )?.[0];
   expect(destination).toBeInstanceOf(PublicTFile);
   expect(
-    deleteFile.mock.calls.filter(([file]) => file === destination)
+    trashFile.mock.calls.filter(([file]) => file === destination)
   ).toHaveLength(1);
   expect(
     harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
@@ -354,16 +354,16 @@ async function runFinalGuardIdentityMutation(
 ): Promise<void> {
   const harness = createIdentityHarness('present', mode);
   configureMutation(harness);
-  const deleteFile = vi.spyOn(harness.app.vault, 'delete');
+  const trashFile = vi.spyOn(harness.app.fileManager, 'trashFile');
 
   await invokeIdentityExtraction(harness);
 
-  const destination = deleteFile.mock.calls.find(
+  const destination = trashFile.mock.calls.find(
     ([file]) => file.path === IDENTITY_DESTINATION_PATH
   )?.[0];
   expect(destination).toBeInstanceOf(PublicTFile);
   expect(
-    deleteFile.mock.calls.filter(([file]) => file === destination)
+    trashFile.mock.calls.filter(([file]) => file === destination)
   ).toHaveLength(1);
   expect(
     harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
@@ -851,7 +851,7 @@ describe('SectionalsPlugin', () => {
     const fileToLinktext = vi.spyOn(app.metadataCache, 'fileToLinktext');
     const create = vi.spyOn(app.vault, 'create');
     const read = vi.spyOn(app.vault, 'read');
-    const deleteFile = vi.spyOn(app.vault, 'delete');
+    const trashFile = vi.spyOn(app.fileManager, 'trashFile');
     const getAbstractFileByPath = vi.spyOn(
       app.vault,
       'getAbstractFileByPath'
@@ -988,7 +988,7 @@ describe('SectionalsPlugin', () => {
     expect(fileToLinktext).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
     expect(read).not.toHaveBeenCalled();
-    expect(deleteFile).not.toHaveBeenCalled();
+    expect(trashFile).not.toHaveBeenCalled();
     expect(getAbstractFileByPath).not.toHaveBeenCalled();
   });
 
@@ -1265,7 +1265,7 @@ describe('SectionalsPlugin', () => {
     );
     const create = vi.spyOn(app.vault, 'create');
     const read = vi.spyOn(app.vault, 'read');
-    const deleteFile = vi.spyOn(app.vault, 'delete');
+    const trashFile = vi.spyOn(app.fileManager, 'trashFile');
     const execute = vi.fn(
       async (
         _editor: SectionEditor,
@@ -1344,7 +1344,7 @@ describe('SectionalsPlugin', () => {
       'created'
     );
     expect(read).toHaveBeenCalledWith(expect.any(PublicTFile));
-    expect(deleteFile).toHaveBeenCalledWith(expect.any(PublicTFile));
+    expect(trashFile).toHaveBeenCalledWith(expect.any(PublicTFile));
     expect(app.vault.getAbstractFileByPath('Extracted/created.md')).toBeNull();
   });
 
@@ -1409,7 +1409,7 @@ describe('SectionalsPlugin', () => {
       const originalCreate = harness.app.vault.create.bind(harness.app.vault);
       const originalDelete = harness.app.vault.delete.bind(harness.app.vault);
       const originalRead = harness.app.vault.read.bind(harness.app.vault);
-      const productionDelete = vi.spyOn(harness.app.vault, 'delete');
+      const productionTrash = vi.spyOn(harness.app.fileManager, 'trashFile');
       const readEvents: string[] = [];
       let destinationReadCount = 0;
       let originalDestination: TFile | undefined;
@@ -1473,7 +1473,7 @@ describe('SectionalsPlugin', () => {
       expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
       expect(harness.fixture.setCursor).not.toHaveBeenCalled();
       expect(harness.openFile).not.toHaveBeenCalled();
-      expect(productionDelete).not.toHaveBeenCalled();
+      expect(productionTrash).not.toHaveBeenCalled();
       expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
         `Extraction stopped, but the new note could not be removed: ${IDENTITY_DESTINATION_PATH}`
       );
@@ -1579,7 +1579,7 @@ describe('SectionalsPlugin', () => {
     async (mode) => {
       await runPostCreateIdentityMutation(
         async (harness) => {
-          await harness.app.vault.delete(harness.sourceFile);
+          await harness.app.fileManager.trashFile(harness.sourceFile);
         },
         undefined,
         'present',
@@ -1593,7 +1593,7 @@ describe('SectionalsPlugin', () => {
     async (mode) => {
       await runPostCreateIdentityMutation(
         async (harness, originalCreate) => {
-          await harness.app.vault.delete(harness.sourceFile);
+          await harness.app.fileManager.trashFile(harness.sourceFile);
           const replacement = await originalCreate(
             IDENTITY_SOURCE_PATH,
             IDENTITY_SOURCE

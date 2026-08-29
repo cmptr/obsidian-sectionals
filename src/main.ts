@@ -463,7 +463,7 @@ function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
     },
     delete(file): Promise<void> {
       assertCurrentExtractionFile(app, file);
-      return app.vault.delete(file);
+      return app.fileManager.trashFile(file);
     },
     fileExists(path): boolean {
       const abstractFile = app.vault.getAbstractFileByPath(normalizePath(path));

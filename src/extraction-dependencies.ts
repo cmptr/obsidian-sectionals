@@ -4,7 +4,6 @@ import type { MarkdownRange } from './markdown-structure.ts';
 
 import { decodeMarkdownCharacterReference } from './markdown-character-reference.ts';
 import { parseMarkdownStructure } from './markdown-structure.ts';
-import { foldUnicodeCase } from './unicode-case-folding.ts';
 
 export type DependencyAnalysis =
   // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
@@ -666,11 +665,16 @@ function isWikilinkLike(source: string, node: MarkdownNode): boolean {
 }
 
 function normalizeReferenceLabel(label: string): string {
-  return foldUnicodeCase(
-    decodeMarkdownSyntax(label)
-      .replaceAll(REFERENCE_WHITESPACE, ' ')
-      .trim()
-  );
+  const normalizedWhitespace = decodeMarkdownSyntax(label)
+    .replaceAll(REFERENCE_WHITESPACE, ' ')
+    .trim();
+  let normalizedCase = '';
+  for (const character of normalizedWhitespace) {
+    normalizedCase += character === 'ı'
+      ? character
+      : character.toLowerCase().toUpperCase();
+  }
+  return normalizedCase;
 }
 
 function parseMarkdown(markdown: string): ParsedMarkdown {

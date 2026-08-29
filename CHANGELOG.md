@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Respect Obsidian's file deletion preference when rolling back a failed extraction.
+- Replace generated Unicode case-folding data with compact reference-label normalization and readable UTF-8 build output.
+
 ## 0.2.0
 
 - Add commands to extract the current section into a linked note or into a new note opened in the current tab.
