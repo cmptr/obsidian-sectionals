@@ -146,7 +146,7 @@ type MockObsidianApp = ReturnType<typeof ObsidianApp.createConfigured__>;
 type SourceIdentityFile = PublicTFile & TFile;
 
 interface MutableIdentityView {
-  editor: Editor;
+  editor: Editor | undefined;
   file: SourceIdentityFile;
 }
 
@@ -168,7 +168,9 @@ type SourceIdentityMutation = (
   originalCreate: OriginalVaultCreate
 ) => Promise<void> | void;
 
-function createIdentityHarness(): IdentityHarness {
+function createIdentityHarness(
+  contextEditorState: 'present' | 'undefined' = 'present'
+): IdentityHarness {
   const app = ObsidianApp.createConfigured__({
     files: {
       'Folder/other.md': IDENTITY_SOURCE,
@@ -195,7 +197,9 @@ function createIdentityHarness(): IdentityHarness {
     IDENTITY_SOURCE.indexOf('body')
   );
   const view = {
-    editor: fixture.editor as Editor,
+    editor: contextEditorState === 'present'
+      ? fixture.editor as Editor
+      : undefined,
     file: sourceFile
   };
   const notify = vi.fn();
@@ -245,9 +249,10 @@ async function invokeIdentityExtraction(
 
 async function runPostCreateIdentityMutation(
   mutate: SourceIdentityMutation,
-  beforeExtraction?: (harness: IdentityHarness) => void
+  beforeExtraction?: (harness: IdentityHarness) => void,
+  contextEditorState: 'present' | 'undefined' = 'present'
 ): Promise<IdentityHarness> {
-  const harness = createIdentityHarness();
+  const harness = createIdentityHarness(contextEditorState);
   const originalCreate = harness.app.vault.create.bind(harness.app.vault);
   let didMutate = false;
   vi.spyOn(harness.app.vault, 'create').mockImplementation(
@@ -1042,6 +1047,22 @@ describe('SectionalsPlugin', () => {
     });
   });
 
+  it('cancels and rolls back when an absent context editor becomes present', async () => {
+    await runPostCreateIdentityMutation(
+      (harness) => {
+        harness.view.editor = harness.alternateFixture.editor as Editor;
+      },
+      undefined,
+      'undefined'
+    );
+  });
+
+  it('cancels and rolls back when a present context editor becomes absent', async () => {
+    await runPostCreateIdentityMutation((harness) => {
+      harness.view.editor = undefined;
+    });
+  });
+
   it('guards source identity after final linktext resolution', async () => {
     await runFinalGuardIdentityMutation((harness) => {
       const originalFileToLinktext = harness.app.metadataCache.fileToLinktext
@@ -1128,7 +1149,7 @@ describe('SectionalsPlugin', () => {
     );
     const harness = await runPostCreateIdentityMutation(
       (identityHarness) => {
-        identityHarness.view.file = identityHarness.otherFile;
+        identityHarness.view.editor = identityHarness.alternateFixture.editor as Editor;
       },
       (identityHarness) => {
         expect(
@@ -1139,7 +1160,8 @@ describe('SectionalsPlugin', () => {
               {} as MarkdownView
             )
         ).toBe(true);
-      }
+      },
+      'undefined'
     );
     const repeatedSource = '## One\none\n## Two\ntwo\n';
     const repeated = createEditor(
@@ -1158,6 +1180,34 @@ describe('SectionalsPlugin', () => {
     expect(repeated.editor.getValue()).toBe(
       '## Two\ntwo\n## One\none\n'
     );
+  });
+
+  it('extracts successfully while an absent context editor remains absent', async () => {
+    const harness = createIdentityHarness('undefined');
+    const extraction = harness.commands.get(
+      'extract-current-section-to-linked-note'
+    );
+
+    expect(
+      extraction?.editorCheckCallback?.(
+        true,
+        harness.fixture.editor as Editor,
+        asMarkdownView(harness.view)
+      )
+    ).toBe(true);
+    expect(harness.getCompletion()).toBeUndefined();
+
+    await invokeIdentityExtraction(harness);
+
+    expect(harness.fixture.replaceRange).toHaveBeenCalledOnce();
+    expect(harness.fixture.editor.getValue()).toBe(
+      '# Extract me\n\n[[Extract me]]\n'
+    );
+    expect(harness.fixture.setCursor).toHaveBeenCalledOnce();
+    expect(harness.notify).not.toHaveBeenCalled();
+    expect(
+      harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
+    ).toBeInstanceOf(PublicTFile);
   });
 
   it('extracts successfully while all captured source identities remain stable', async () => {

@@ -261,9 +261,7 @@ export default class SectionalsPlugin extends Plugin {
           return false;
         }
         if (!isChecking) {
-          if (context.editor === undefined) {
-            return false;
-          }
+          const expectedContextEditor = context.editor;
           const expectedSourcePath = normalizePath(sourceFile.path);
           const execution = runExtractionCommand(
             createGuardedExtractionEditor(
@@ -271,6 +269,7 @@ export default class SectionalsPlugin extends Plugin {
               sourceFile,
               expectedSourcePath,
               context,
+              expectedContextEditor,
               editor
             ),
             expectedSourcePath,
@@ -306,6 +305,7 @@ function createGuardedExtractionEditor(
   sourceFile: TFile,
   expectedSourcePath: string,
   context: MarkdownFileInfo | MarkdownView,
+  expectedContextEditor: Editor | undefined,
   editor: Editor
 ): ExtractionEditor {
   function assertSourceIdentity(): void {
@@ -314,7 +314,7 @@ function createGuardedExtractionEditor(
         sourceFile.path !== expectedSourcePath
         || app.vault.getAbstractFileByPath(expectedSourcePath) !== sourceFile
         || context.file !== sourceFile
-        || context.editor !== editor
+        || context.editor !== expectedContextEditor
       ) {
         throw new ExtractionSourceChangedError();
       }
