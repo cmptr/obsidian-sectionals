@@ -198,6 +198,7 @@ describe('executeSectionExtraction validation', () => {
       executeSectionExtraction(
         editor,
         'Source.md',
+        { mode: 'linked' },
         runtime,
         notify,
         staticPlanner({ kind: 'unavailable' })
@@ -226,6 +227,7 @@ describe('executeSectionExtraction validation', () => {
         executeSectionExtraction(
           editor,
           'Source.md',
+          { mode: 'linked' },
           runtime,
           notify,
           staticPlanner({ kind: 'invalid', reason })
@@ -238,10 +240,58 @@ describe('executeSectionExtraction validation', () => {
       expect(editor.setCursor).not.toHaveBeenCalled();
     }
   );
+
+  it('does not open a file when open extraction is unavailable', async () => {
+    const editor = new StatefulEditor('plain text\n', 2);
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify,
+        staticPlanner({ kind: 'unavailable' })
+      )
+    ).resolves.toBe(false);
+
+    expect(notices).toEqual([]);
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.create).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('does not open a file when an open extraction plan is invalid', async () => {
+    const editor = new StatefulEditor('# Heading\nbody\n', 12);
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify,
+        staticPlanner({ kind: 'invalid', reason: 'unusable-title' })
+      )
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{ kind: 'unusable-title' }]);
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.create).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
 });
 
 describe('executeSectionExtraction success', () => {
-  it('creates and verifies the destination before replacing the source and mapping the cursor', async () => {
+  it('executes linked mode without an opener and maps the cursor to the committed link', async () => {
     const events: string[] = [];
     const editor = new StatefulEditor('# Beta\nbody\n', 9, events);
     const runtime = new StatefulRuntime(events);
@@ -255,7 +305,7 @@ describe('executeSectionExtraction success', () => {
     }
 
     await expect(
-      executeSectionExtraction(editor, 'Projects/Source.md', runtime, notify, planner)
+      executeSectionExtraction(editor, 'Projects/Source.md', { mode: 'linked' }, runtime, notify, planner)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([]);
@@ -292,6 +342,162 @@ describe('executeSectionExtraction success', () => {
     ]);
     expect(runtime.delete).not.toHaveBeenCalled();
   });
+
+  it('executes open mode only after inspecting the exact source commit', async () => {
+    const events: string[] = [];
+    const editor = new StatefulEditor('# Beta\nbody\n', 9, events);
+    const runtime = new StatefulRuntime(events);
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn(async (file: FakeFile) => {
+      events.push(`open:${file.path}`);
+    });
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Projects/Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([]);
+    expect(runtime.files.get('Extracted/Beta.md')?.content).toBe(
+      '# Beta\n\nbody\n'
+    );
+    expect(openCreatedFile).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ path: 'Extracted/Beta.md' })
+    );
+    expect(runtime.getLinktext).not.toHaveBeenCalled();
+    expect(editor.currentSource()).toBe('');
+    expect(editor.replaceRange).toHaveBeenCalledExactlyOnceWith(
+      '',
+      { ch: 0, line: 0 },
+      { ch: 0, line: 2 }
+    );
+    expect(editor.setCursor).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    const replacementIndex = events.indexOf('replaceRange');
+    const commitInspectionIndex = events.indexOf('getValue', replacementIndex + 1);
+    const openingIndex = events.indexOf('open:Extracted/Beta.md');
+    expect(replacementIndex).toBeGreaterThanOrEqual(0);
+    expect(commitInspectionIndex).toBeGreaterThan(replacementIndex);
+    expect(openingIndex).toBeGreaterThan(commitInspectionIndex);
+  });
+});
+
+describe('executeSectionExtraction open-mode postcommit', () => {
+  it('retains the committed destination and reports its path when opening fails', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn(async () => {
+      throw new Error('open failed');
+    });
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('');
+    expect(runtime.files.get('Extracted/Beta.md')?.content).toBe(
+      '# Beta\n\nbody\n'
+    );
+    expect(openCreatedFile).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ path: 'Extracted/Beta.md' })
+    );
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([{
+      kind: 'open-failed',
+      path: 'Extracted/Beta.md'
+    }]);
+  });
+
+  it('opens and retains an exact commit when replaceRange applies it before throwing', async () => {
+    const events: string[] = [];
+    const editor = new StatefulEditor('# Beta\nbody\n', 9, events);
+    editor.replaceRange.mockImplementationOnce((replacement, from, to) => {
+      events.push('replaceRange:exact-then-throw');
+      const source = editor.currentSource();
+      editor.overwriteSource(
+        source.slice(0, editor.offsetFor(from))
+          + replacement
+          + source.slice(editor.offsetFor(to ?? from))
+      );
+      throw new Error('edit reported failure');
+    });
+    const runtime = new StatefulRuntime(events);
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn(async (file: FakeFile) => {
+      events.push(`open:${file.path}`);
+    });
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('');
+    expect(openCreatedFile).toHaveBeenCalledOnce();
+    const replacementIndex = events.indexOf('replaceRange:exact-then-throw');
+    const commitInspectionIndex = events.indexOf('getValue', replacementIndex + 1);
+    const openingIndex = events.indexOf('open:Extracted/Beta.md');
+    expect(replacementIndex).toBeGreaterThanOrEqual(0);
+    expect(commitInspectionIndex).toBeGreaterThan(replacementIndex);
+    expect(openingIndex).toBeGreaterThan(commitInspectionIndex);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+  });
+
+  it('reports only the retained path when opening an exact throwing commit also fails', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce((replacement, from, to) => {
+      const source = editor.currentSource();
+      editor.overwriteSource(
+        source.slice(0, editor.offsetFor(from))
+          + replacement
+          + source.slice(editor.offsetFor(to ?? from))
+      );
+      throw new Error('edit reported failure');
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn(async () => {
+      throw new Error('open failed');
+    });
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('');
+    expect(openCreatedFile).toHaveBeenCalledOnce();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([{
+      kind: 'open-failed',
+      path: 'Extracted/Beta.md'
+    }]);
+  });
 });
 
 describe('executeSectionExtraction created-file identity', () => {
@@ -306,7 +512,7 @@ describe('executeSectionExtraction created-file identity', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -334,7 +540,7 @@ describe('executeSectionExtraction created-file identity', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -357,7 +563,7 @@ describe('executeSectionExtraction created-file identity', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -379,7 +585,7 @@ describe('executeSectionExtraction created-file identity', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -387,6 +593,35 @@ describe('executeSectionExtraction created-file identity', () => {
       path: 'Extracted/Beta.md'
     }]);
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('does not open a destination whose identity changes during readback', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.afterRead = (file): void => {
+      file.path = 'Moved/Beta.md';
+    };
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(openCreatedFile).not.toHaveBeenCalled();
     expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
@@ -403,7 +638,7 @@ describe('executeSectionExtraction created-file identity', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -444,7 +679,7 @@ describe('executeSectionExtraction final commit gate', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(didMutationMicrotaskRun).toBe(true);
@@ -463,7 +698,7 @@ describe('executeSectionExtraction final commit gate', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(runtime.getLinktext).toHaveBeenCalledTimes(2);
@@ -483,7 +718,7 @@ describe('executeSectionExtraction final commit gate', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -522,7 +757,7 @@ describe('executeSectionExtraction collision races', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Projects/Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Projects/Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([]);
@@ -570,10 +805,37 @@ describe('executeSectionExtraction collision races', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'create-failed' }]);
+    expect(runtime.create).toHaveBeenCalledOnce();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('does not open a file when open-mode destination creation fails', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.create.mockImplementationOnce(async (path) => {
+      runtime.events.push(`create:${path}`);
+      throw new Error('permission denied');
+    });
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{ kind: 'create-failed' }]);
+    expect(openCreatedFile).not.toHaveBeenCalled();
     expect(runtime.create).toHaveBeenCalledOnce();
     expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
@@ -592,7 +854,7 @@ describe('executeSectionExtraction collision races', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'create-failed' }]);
@@ -611,7 +873,7 @@ describe('executeSectionExtraction collision races', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'create-failed' }]);
@@ -636,13 +898,42 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'source-changed' }]);
     expect(createdFile).toBeDefined();
     expect(runtime.read).toHaveBeenCalledExactlyOnceWith(createdFile);
     expect(runtime.delete).toHaveBeenCalledExactlyOnceWith(createdFile);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a stale open extraction without opening the created file', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.create.mockImplementationOnce(async (path, content) => {
+      runtime.events.push(`create:${path}`);
+      const file = runtime.storeCreatedFile(path, content);
+      editor.overwriteSource('# Beta\nchanged\n');
+      return file;
+    });
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{ kind: 'source-changed' }]);
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.delete).toHaveBeenCalledOnce();
     expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
@@ -661,7 +952,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'source-changed' }]);
@@ -685,7 +976,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
@@ -709,7 +1000,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -730,7 +1021,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -755,7 +1046,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -783,7 +1074,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -805,7 +1096,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
@@ -827,7 +1118,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -861,7 +1152,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -882,13 +1173,40 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
     expect(runtime.read).toHaveBeenCalledTimes(2);
     expect(runtime.delete).toHaveBeenCalledOnce();
     expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('does not create or open a file when open-mode destination preparation cannot resolve a relative link', async () => {
+    const editor = new StatefulEditor(
+      '# Beta\n[Asset](../Assets/Missing.png)\n',
+      10
+    );
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Projects/Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{ kind: 'unresolved-relative-link' }]);
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.create).not.toHaveBeenCalled();
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -901,7 +1219,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Projects/Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Projects/Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'unresolved-relative-link' }]);
@@ -922,13 +1240,70 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
     expect(runtime.delete).toHaveBeenCalledOnce();
     expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(editor.setCursor).not.toHaveBeenCalled();
+  });
+
+  it('rolls back and does not open when open-mode replaceRange returns without mutation', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce(() => {
+      editor.events.push('replaceRange:no-op');
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(runtime.delete).toHaveBeenCalledOnce();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(editor.setCursor).not.toHaveBeenCalled();
+  });
+
+  it('retains an indeterminate open-mode partial mutation without opening or deleting', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce(() => {
+      editor.overwriteSource('# Bet');
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('# Bet');
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(notices).toEqual([{
+      kind: 'indeterminate-source-mutation',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
@@ -941,7 +1316,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -962,7 +1337,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
@@ -988,14 +1363,14 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('[[Beta]]\n');
     expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
     expect(runtime.delete).not.toHaveBeenCalled();
-    expect(editor.setCursor).not.toHaveBeenCalled();
+    expect(editor.setCursor).toHaveBeenCalledOnce();
   });
 
   it('retains the destination and reports an indeterminate partial mutation', async () => {
@@ -1008,7 +1383,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('[[Bet');
@@ -1038,7 +1413,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
@@ -1059,7 +1434,7 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     const { notices, notify } = createNotify();
 
     await expect(
-      executeSectionExtraction(editor, 'Source.md', runtime, notify)
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('[[Beta]]\n');

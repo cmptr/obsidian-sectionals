@@ -39,6 +39,16 @@ export interface ExtractionFile {
   readonly path: string;
 }
 
+export type ExtractionExecution<File extends ExtractionFile> =
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | { readonly mode: 'linked' }
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | {
+    readonly mode: 'open';
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved execution contract uses a readonly function property.
+    readonly openCreatedFile: (file: File) => Promise<void>;
+  };
+
 export interface ExtractionRuntime<File extends ExtractionFile> {
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
   readonly create: (path: string, content: string) => Promise<File>;
@@ -67,6 +77,7 @@ export type ExtractionNotice =
   | 'cross-boundary-reference'
   | 'destination-changed'
   | 'indeterminate-source-mutation'
+  | 'open-failed'
   | 'rollback-failed'
   | 'source-changed'
   | 'source-edit-failed'
@@ -89,7 +100,9 @@ interface CommitRollbackResult {
 }
 
 interface CommitSuccessResult {
+  readonly edit: ExtractionSourceEdit;
   readonly kind: 'success';
+  readonly sourceNotice?: ExtractionNoticeDetails;
 }
 
 interface DestinationReadyDiscriminant {
@@ -99,15 +112,6 @@ interface DestinationReadyDiscriminant {
 type ReadyDestinationPreparation = Extract<
   DestinationPreparation,
   DestinationReadyDiscriminant
->;
-
-interface LinkedExtractionSourceEditDiscriminant {
-  readonly mode: 'linked';
-}
-
-type LinkedExtractionSourceEdit = Extract<
-  ExtractionSourceEdit,
-  LinkedExtractionSourceEditDiscriminant
 >;
 
 interface CreatedDestination<File extends ExtractionFile> {
@@ -152,6 +156,7 @@ type RollbackResult = DeletedRollbackResult | FailedRollbackResult;
 export async function executeSectionExtraction<File extends ExtractionFile>(
   editor: ExtractionEditor,
   sourcePath: string,
+  execution: ExtractionExecution<File>,
   runtime: ExtractionRuntime<File>,
   notify: (details: ExtractionNoticeDetails) => void,
   planner: typeof planSectionExtraction = planSectionExtraction
@@ -181,13 +186,14 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
     return true;
   }
 
-  let initialEdit: LinkedExtractionSourceEdit;
+  let initialEdit: ExtractionSourceEdit;
   try {
     initialEdit = buildSourceEdit(
       creation.file,
       sourcePath,
       originalSource,
       plan.draft,
+      execution,
       runtime
     );
   } catch {
@@ -248,10 +254,20 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
     sourcePath,
     plan.draft,
     initialEdit,
+    execution,
     runtime,
     creation
   );
   if (commit.kind === 'success') {
+    const notice = await finishCommittedExtraction(
+      editor,
+      execution,
+      creation,
+      commit
+    );
+    if (notice !== null) {
+      notify(notice);
+    }
     return true;
   }
   if (commit.kind === 'notice') {
@@ -292,22 +308,22 @@ function buildSourceEdit<File extends ExtractionFile>(
   sourcePath: string,
   originalSource: string,
   draft: SectionExtractionDraft,
+  execution: ExtractionExecution<File>,
   runtime: ExtractionRuntime<File>
-): LinkedExtractionSourceEdit {
+): ExtractionSourceEdit {
+  if (execution.mode === 'open') {
+    return createExtractionSourceEdit(originalSource, draft, { mode: 'open' });
+  }
   const linktext = runtime.getLinktext(file, sourcePath);
   const wikilink = createExtractionWikilink(
     linktext,
     draft.displayTitle,
     file.basename
   );
-  const edit = createExtractionSourceEdit(originalSource, draft, {
+  return createExtractionSourceEdit(originalSource, draft, {
     mode: 'linked',
     wikilink
   });
-  if (edit.mode !== 'linked') {
-    throw new TypeError('Linked extraction must create a linked source edit.');
-  }
-  return edit;
 }
 
 function createSourceOperationFailure(
@@ -337,7 +353,8 @@ function commitSourceExtraction<File extends ExtractionFile>(
   originalSource: string,
   sourcePath: string,
   draft: SectionExtractionDraft,
-  initialEdit: LinkedExtractionSourceEdit,
+  initialEdit: ExtractionSourceEdit,
+  execution: ExtractionExecution<File>,
   runtime: ExtractionRuntime<File>,
   creation: CreatedDestination<File>
 ): CommitResult {
@@ -350,13 +367,14 @@ function commitSourceExtraction<File extends ExtractionFile>(
     return { kind: 'rollback', notice: sourceFailure };
   }
 
-  let finalEdit: LinkedExtractionSourceEdit;
+  let finalEdit: ExtractionSourceEdit;
   try {
     finalEdit = buildSourceEdit(
       creation.file,
       sourcePath,
       originalSource,
       draft,
+      execution,
       runtime
     );
   } catch {
@@ -427,16 +445,39 @@ function commitSourceExtraction<File extends ExtractionFile>(
   if (sourceAfterReplacement !== expectedSource) {
     return createIndeterminateCommitNotice(creation.intendedPath);
   }
-  if (didReplacementThrow) {
-    return { kind: 'notice', notice: { kind: 'source-edit-failed' } };
+  return didReplacementThrow
+    ? {
+      edit,
+      kind: 'success',
+      sourceNotice: { kind: 'source-edit-failed' }
+    }
+    : { edit, kind: 'success' };
+}
+
+async function finishCommittedExtraction<File extends ExtractionFile>(
+  editor: ExtractionEditor,
+  execution: ExtractionExecution<File>,
+  creation: CreatedDestination<File>,
+  commit: CommitSuccessResult
+): Promise<ExtractionNoticeDetails | null> {
+  if (execution.mode === 'open') {
+    try {
+      await execution.openCreatedFile(creation.file);
+    } catch {
+      return { kind: 'open-failed', path: creation.intendedPath };
+    }
+    return commit.sourceNotice ?? null;
   }
 
-  try {
-    editor.setCursor(editor.offsetToPos(edit.cursorOffset));
-  } catch {
-    return { kind: 'notice', notice: { kind: 'source-edit-failed' } };
+  if (commit.edit.mode !== 'linked') {
+    throw new TypeError('Linked extraction requires a linked source edit.');
   }
-  return { kind: 'success' };
+  try {
+    editor.setCursor(editor.offsetToPos(commit.edit.cursorOffset));
+  } catch {
+    return { kind: 'source-edit-failed' };
+  }
+  return commit.sourceNotice ?? null;
 }
 
 async function createDestination<File extends ExtractionFile>(
