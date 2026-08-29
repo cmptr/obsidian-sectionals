@@ -376,16 +376,13 @@ describe('planSectionMovement', () => {
   ].join('\n');
   const nestedCursorSource = [
     '# Root',
-    '## Alpha',
-    'Alpha body',
-    '## Beta',
-    'Beta body',
-    '### Beta child',
-    'Child body',
-    '## Gamma',
-    'Gamma body',
-    '## Delta',
-    'Delta body',
+    '## Parent',
+    'Parent body',
+    '### One',
+    'One body',
+    '### Two',
+    'Two body',
+    '## Keep',
     ''
   ].join('\n');
   const eofCursorSource = [
@@ -428,23 +425,20 @@ describe('planSectionMovement', () => {
         trackedText: 'body'
       },
       {
-        cursorOffset: nestedCursorSource.indexOf('Child body') + 'Child '.length,
+        cursorOffset: nestedCursorSource.indexOf('Two body') + 'Two '.length,
         expectedOutput: [
           '# Root',
-          '## Alpha',
-          'Alpha body',
-          '## Gamma',
-          'Gamma body',
-          '## Delta',
-          'Delta body',
-          '## Beta',
-          'Beta body',
-          '### Beta child',
-          'Child body',
+          '## Parent',
+          'Parent body',
+          '### Two',
+          'Two body',
+          '### One',
+          'One body',
+          '## Keep',
           ''
         ].join('\n'),
-        mode: 'end',
-        name: 'a parent section moving from its descendant body',
+        mode: 'up',
+        name: 'a deepest nested section moving from its body',
         source: nestedCursorSource,
         trackedText: 'body'
       },
@@ -488,6 +482,28 @@ describe('planSectionMovement', () => {
       ).toBe(trackedText);
     }
   );
+
+  it('does not climb from a singleton nested section to its movable parent', () => {
+    const source = [
+      '# Root',
+      '## Alpha',
+      'Alpha body',
+      '## Beta',
+      'Beta body',
+      '### Only child',
+      'Child body',
+      '## Gamma',
+      'Gamma body',
+      ''
+    ].join('\n');
+
+    expect(
+      planSectionMovement(source, source.indexOf('Child body'), {
+        kind: 'move-section',
+        mode: 'end'
+      })
+    ).toBeNull();
+  });
 
   it('returns the original action and rejects invalid cursor offsets', () => {
     const source = '# Alpha\na\n# Beta\nb\n';
