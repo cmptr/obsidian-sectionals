@@ -11,9 +11,7 @@ VAULT_EXPANDED := $(subst ~,$(HOME),$(VAULT))
 PLUGIN_ID := sectionals
 PLUGIN_DIR := $(VAULT_EXPANDED)/.obsidian/plugins/$(PLUGIN_ID)
 BUILD_DIR := dist
-RELEASE_DIR := dist/release
 VERSION := $(shell node -p "require('./manifest.json').version")
-ZIP_NAME := $(PLUGIN_ID)-$(VERSION).zip
 ARTIFACTS := main.js manifest.json
 
 .PHONY: help install dev build typecheck lint format test test-watch check \
@@ -86,14 +84,8 @@ prepare-release: ## Update release files (requires VERSION=x.y.z)
 validate-release: ## Verify synchronized release versions and changelog
 	pnpm exec jiti scripts/release.ts validate "$(VERSION)"
 
-release: validate-release check ## Build and package an Obsidian release zip
-	command -v python3 >/dev/null || { echo "python3 is required to package releases"; exit 1; }
-	rm -rf "$(RELEASE_DIR)"
-	mkdir -p "$(RELEASE_DIR)"
-	cp $(addprefix "$(BUILD_DIR)/",$(ARTIFACTS)) "$(RELEASE_DIR)/"
-	cd "$(RELEASE_DIR)" && python3 -c "import zipfile; files=['main.js','manifest.json']; archive=zipfile.ZipFile('$(ZIP_NAME)', 'w', zipfile.ZIP_DEFLATED); [archive.write(file) for file in files]; archive.close()"
-	pnpm exec jiti scripts/release.ts verify-archive "$(RELEASE_DIR)/$(ZIP_NAME)"
-	@echo "Release artifact: $(RELEASE_DIR)/$(ZIP_NAME)"
+release: validate-release check ## Validate and build the GitHub release assets
+	@echo "Release assets: $(addprefix $(BUILD_DIR)/,$(ARTIFACTS))"
 
 tag-release: ## Validate, build, and create an annotated stable tag
 	pnpm exec jiti scripts/release.ts pretag "$(VERSION)"

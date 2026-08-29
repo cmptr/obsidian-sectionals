@@ -13,16 +13,9 @@ export interface ReleaseFiles {
 }
 
 const STABLE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
-const ARCHIVE_ENTRIES = ['main.js', 'manifest.json'] as const;
 const RELEASE_FILE_PATHS = ['CHANGELOG.md', 'manifest.json', 'package.json', 'versions.json'] as const;
 const JSON_INDENT = 2;
 const CLI_ARGUMENT_START_INDEX = 2;
-
-export function assertArchiveEntries(entries: readonly string[]): void {
-  if (entries.length !== ARCHIVE_ENTRIES.length || entries.some((entry, index) => entry !== ARCHIVE_ENTRIES[index])) {
-    throw new Error('Release archive must contain exactly main.js, then manifest.json');
-  }
-}
 
 export function assertReleaseBranch(branch: string): void {
   if (branch !== 'master') {
@@ -166,7 +159,8 @@ function main(): void {
       gitOutput(['commit', '-m', `chore: release ${version}`]);
       assertCleanWorktree();
       gitOutput(['tag', '-a', version, '-m', `Sectionals ${version}`]);
-      writeOutput(`Created release commit and tag ${version}. Push explicitly with: git push origin master ${version}`);
+      execFileSync('git', ['push', '--atomic', 'origin', 'master', version], { stdio: 'inherit' });
+      writeOutput(`Created and pushed release ${version}.`);
       return;
     }
     case 'prepare': {
@@ -192,13 +186,8 @@ function main(): void {
       writeOutput(`Release files match ${version}.`);
       return;
     }
-    case 'verify-archive': {
-      verifyArchive(requireArgument(argument, 'release.ts verify-archive <path>'));
-      writeOutput(`Release archive has the expected entries: ${ARCHIVE_ENTRIES.join(', ')}.`);
-      return;
-    }
     default: {
-      throw new Error('Usage: release.ts <cut|prepare|validate|pretag|verify-archive> <value>');
+      throw new Error('Usage: release.ts <cut|prepare|validate|pretag> <value>');
     }
   }
 }
@@ -249,19 +238,6 @@ function requireArgument(value: string | undefined, usage: string): string {
     throw new Error(`Usage: ${usage}`);
   }
   return value;
-}
-
-function verifyArchive(path: string): void {
-  const output = execFileSync(
-    'python3',
-    ['-c', 'import json, sys, zipfile; print(json.dumps(zipfile.ZipFile(sys.argv[1]).namelist()))', path],
-    { encoding: 'utf-8' }
-  );
-  const entries: unknown = JSON.parse(output);
-  if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== 'string')) {
-    throw new Error(`Unable to read archive entries from ${path}`);
-  }
-  assertArchiveEntries(entries as string[]);
 }
 
 function writeOutput(message: string): void {

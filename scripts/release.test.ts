@@ -7,13 +7,8 @@ import { join, resolve } from 'node:path';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 
-import {
-  assertArchiveEntries,
-  assertReleaseBranch,
-  incrementStableVersion,
-  prepareReleaseFiles,
-  validateReleaseFiles
-} from './release.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible release imports compact.
+import { assertReleaseBranch, incrementStableVersion, prepareReleaseFiles, validateReleaseFiles } from './release.ts';
 
 const EXECUTABLE_FILE_MODE = 0o755;
 
@@ -63,8 +58,9 @@ describe('prepareReleaseFiles', () => {
 });
 
 describe('cut release command', () => {
-  it('prepares, validates, commits, and tags the next local release without pushing', () => {
+  it('prepares, validates, commits, tags, and pushes the next release', () => {
     const repo = mkdtempSync(join(tmpdir(), 'sectionals-release-'));
+    const remote = `${repo}-remote.git`;
     const binDirectory = join(repo, 'bin');
     const makeLog = join(repo, '.git', 'make.log');
 
@@ -78,10 +74,13 @@ describe('cut release command', () => {
       chmodSync(join(binDirectory, 'make'), EXECUTABLE_FILE_MODE);
 
       execFileSync('git', ['init', '--initial-branch=master'], { cwd: repo });
+      execFileSync('git', ['init', '--bare', remote]);
       execFileSync('git', ['config', 'user.name', 'Release Test'], { cwd: repo });
       execFileSync('git', ['config', 'user.email', 'release@example.com'], { cwd: repo });
       execFileSync('git', ['add', '.'], { cwd: repo });
       execFileSync('git', ['commit', '-m', 'Initial release'], { cwd: repo });
+      execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: repo });
+      execFileSync('git', ['push', '--set-upstream', 'origin', 'master'], { cwd: repo });
 
       execFileSync(resolve('node_modules/.bin/jiti'), [resolve('scripts/release.ts'), 'cut', 'patch'], {
         cwd: repo,
@@ -93,9 +92,15 @@ describe('cut release command', () => {
         'chore: release 0.1.1'
       );
       expect(execFileSync('git', ['tag', '--list'], { cwd: repo, encoding: 'utf-8' }).trim()).toBe('0.1.1');
+      expect(execFileSync('git', ['--git-dir', remote, 'tag', '--list'], { encoding: 'utf-8' }).trim()).toBe('0.1.1');
+      expect(
+        execFileSync('git', ['--git-dir', remote, 'log', '-1', '--pretty=%s', 'master'], { encoding: 'utf-8' }).trim()
+      )
+        .toBe('chore: release 0.1.1');
       expect(readFileSync(makeLog, 'utf-8')).toBe('release VERSION=0.1.1\n');
     } finally {
       rmSync(repo, { force: true, recursive: true });
+      rmSync(remote, { force: true, recursive: true });
     }
   });
 });
@@ -119,20 +124,6 @@ describe('assertReleaseBranch', () => {
   });
 });
 
-describe('assertArchiveEntries', () => {
-  it('accepts only main.js followed by manifest.json', () => {
-    expect(() => {
-      assertArchiveEntries(['main.js', 'manifest.json']);
-    }).not.toThrow();
-    expect(() => {
-      assertArchiveEntries(['manifest.json', 'main.js']);
-    }).toThrow('exactly main.js, then manifest.json');
-    expect(() => {
-      assertArchiveEntries(['main.js', 'manifest.json', 'styles.css']);
-    }).toThrow('exactly main.js, then manifest.json');
-  });
-});
-
 describe('build output', () => {
   it('places the plugin entry point where build verification can discover it', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf-8')) as Record<string, unknown>;
@@ -144,6 +135,13 @@ describe('build output', () => {
 });
 
 describe('release Make targets', () => {
+  it('builds release assets without creating a ZIP archive', () => {
+    const output = execFileSync('make', ['--no-print-directory', '--dry-run', 'release'], { encoding: 'utf-8' });
+
+    expect(output).not.toContain('zipfile');
+    expect(output).not.toContain('verify-archive');
+  });
+
   it.each(
     [
       ['release-patch', 'patch'],
