@@ -15,7 +15,8 @@ import type {
 } from './section-extraction-executor.ts';
 import type { SectionExtractionPlan } from './section-extraction-planner.ts';
 
-import { executeSectionExtraction } from './section-extraction-executor.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible executor imports compact.
+import { executeSectionExtraction, ExtractionSourceChangedError } from './section-extraction-executor.ts';
 import { planSectionExtraction } from './section-extraction-planner.ts';
 
 interface NotifyFixture {
@@ -1371,6 +1372,155 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
     expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).toHaveBeenCalledOnce();
+  });
+
+  it('classifies an exact linked mutation before trusting a thrown source-changed error', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce((replacement, from, to) => {
+      const source = editor.currentSource();
+      editor.overwriteSource(
+        source.slice(0, editor.offsetFor(from))
+          + replacement
+          + source.slice(editor.offsetFor(to ?? from))
+      );
+      throw new ExtractionSourceChangedError();
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('[[Beta]]\n');
+    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.setCursor).toHaveBeenCalledOnce();
+  });
+
+  it('classifies an exact open mutation before trusting a thrown source-changed error', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce((replacement, from, to) => {
+      const source = editor.currentSource();
+      editor.overwriteSource(
+        source.slice(0, editor.offsetFor(from))
+          + replacement
+          + source.slice(editor.offsetFor(to ?? from))
+      );
+      throw new ExtractionSourceChangedError();
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('');
+    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(openCreatedFile).toHaveBeenCalledOnce();
+    expect(editor.setCursor).not.toHaveBeenCalled();
+  });
+
+  it('gives opener failure precedence after an exact mutation throws a source-changed error', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce((replacement, from, to) => {
+      const source = editor.currentSource();
+      editor.overwriteSource(
+        source.slice(0, editor.offsetFor(from))
+          + replacement
+          + source.slice(editor.offsetFor(to ?? from))
+      );
+      throw new ExtractionSourceChangedError();
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn(async () => {
+      throw new Error('open failed');
+    });
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('');
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(openCreatedFile).toHaveBeenCalledOnce();
+    expect(notices).toEqual([{
+      kind: 'open-failed',
+      path: 'Extracted/Beta.md'
+    }]);
+  });
+
+  it('retains a linked partial mutation when replacement throws a source-changed error', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce(() => {
+      editor.overwriteSource('[[Bet');
+      throw new ExtractionSourceChangedError();
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('[[Bet');
+    expect(notices).toEqual([{
+      kind: 'indeterminate-source-mutation',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.setCursor).not.toHaveBeenCalled();
+  });
+
+  it('retains an open partial mutation when replacement throws a source-changed error', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    editor.replaceRange.mockImplementationOnce(() => {
+      editor.overwriteSource('# Bet');
+      throw new ExtractionSourceChangedError();
+    });
+    const runtime = new StatefulRuntime();
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe('# Bet');
+    expect(notices).toEqual([{
+      kind: 'indeterminate-source-mutation',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
   it('retains the destination and reports an indeterminate partial mutation', async () => {

@@ -21,8 +21,11 @@ import type { StructuralAction, StructuralEditPlan } from './structural-action.t
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
 import { openDeletionTargetPicker } from './deletion-target-modal.ts';
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible executor imports compact.
-import { executeSectionExtraction, ExtractionSourceChangedError } from './section-extraction-executor.ts';
+import {
+  executeSectionExtraction,
+  ExtractionPreDelegationSourceChangedError,
+  ExtractionSourceChangedError
+} from './section-extraction-executor.ts';
 import { planSectionExtraction } from './section-extraction-planner.ts';
 import { planSectionMovement } from './section-movement-planner.ts';
 
@@ -351,7 +354,11 @@ function createGuardedExtractionEditor(
       return editor.posToOffset(position);
     },
     replaceRange(replacement, from, to, origin): void {
-      assertSourceIdentity();
+      try {
+        assertSourceIdentity();
+      } catch {
+        throw new ExtractionPreDelegationSourceChangedError();
+      }
       editor.replaceRange(replacement, from, to, origin);
     },
     setCursor(position, character): void {

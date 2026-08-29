@@ -1258,7 +1258,7 @@ describe('SectionalsPlugin', () => {
     });
   });
 
-  it('guards source identity immediately before source replacement', async () => {
+  it('rolls back without delegating when the pre-replacement identity guard fails', async () => {
     await runFinalGuardIdentityMutation((harness) => {
       const getValue = vi.mocked(harness.fixture.editor.getValue);
       const originalGetValue = getValue.getMockImplementation();

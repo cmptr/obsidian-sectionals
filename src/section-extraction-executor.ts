@@ -25,6 +25,13 @@ export class ExtractionSourceChangedError extends Error {
   }
 }
 
+export class ExtractionPreDelegationSourceChangedError extends ExtractionSourceChangedError {
+  public constructor() {
+    super();
+    this.name = 'ExtractionPreDelegationSourceChangedError';
+  }
+}
+
 export interface ExtractionEditor {
   readonly getCursor: Editor['getCursor'];
   readonly getValue: Editor['getValue'];
@@ -336,16 +343,16 @@ function createSourceOperationFailure(
   };
 }
 
-function getPreReplacementFailure<File extends ExtractionFile>(
+function getPreDelegationReplacementFailure<File extends ExtractionFile>(
   error: unknown,
   creation: CreatedDestination<File>
-): CommitResult | null {
-  if (!doesCreatedDestinationMatch(creation)) {
-    return createCommitDestinationChanged(creation.intendedPath);
+): CommitNoticeResult | CommitRollbackResult | null {
+  if (!(error instanceof ExtractionPreDelegationSourceChangedError)) {
+    return null;
   }
-  return error instanceof ExtractionSourceChangedError
+  return doesCreatedDestinationMatch(creation)
     ? { kind: 'rollback', notice: { kind: 'source-changed' } }
-    : null;
+    : createCommitDestinationChanged(creation.intendedPath);
 }
 
 function commitSourceExtraction<File extends ExtractionFile>(
@@ -420,9 +427,12 @@ function commitSourceExtraction<File extends ExtractionFile>(
   try {
     editor.replaceRange(edit.replacement, from, to);
   } catch (error) {
-    const replacementFailure = getPreReplacementFailure(error, creation);
-    if (replacementFailure !== null) {
-      return replacementFailure;
+    const preDelegationFailure = getPreDelegationReplacementFailure(
+      error,
+      creation
+    );
+    if (preDelegationFailure !== null) {
+      return preDelegationFailure;
     }
     didReplacementThrow = true;
   }
@@ -433,17 +443,19 @@ function commitSourceExtraction<File extends ExtractionFile>(
   } catch {
     return createIndeterminateCommitNotice(creation.intendedPath);
   }
-  if (!doesCreatedDestinationMatch(creation)) {
-    return createCommitDestinationChanged(creation.intendedPath);
-  }
   if (sourceAfterReplacement === originalSource) {
-    return {
-      kind: 'rollback',
-      notice: { kind: 'source-edit-failed' }
-    };
+    return doesCreatedDestinationMatch(creation)
+      ? {
+        kind: 'rollback',
+        notice: { kind: 'source-edit-failed' }
+      }
+      : createCommitDestinationChanged(creation.intendedPath);
   }
   if (sourceAfterReplacement !== expectedSource) {
     return createIndeterminateCommitNotice(creation.intendedPath);
+  }
+  if (!doesCreatedDestinationMatch(creation)) {
+    return createCommitDestinationChanged(creation.intendedPath);
   }
   return didReplacementThrow
     ? {
