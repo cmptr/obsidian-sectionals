@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.1
+
 - Respect Obsidian's file deletion preference when rolling back a failed extraction.
 - Replace generated Unicode case-folding data with compact reference-label normalization and readable UTF-8 build output.
 
