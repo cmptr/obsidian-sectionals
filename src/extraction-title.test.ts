@@ -52,6 +52,66 @@ describe('deriveExtractionTitle', () => {
     });
   });
 
+  it.each([
+    [
+      'code span text',
+      'Alpha  `a  b`  Omega',
+      'Alpha `a  b` Omega',
+      'Alpha a b Omega'
+    ],
+    [
+      'link destination',
+      'Alpha  [Beta](<notes/beta  file.md>)  Omega',
+      'Alpha [Beta](<notes/beta  file.md>) Omega',
+      'Alpha Beta Omega'
+    ],
+    [
+      'link title',
+      'Alpha  [Beta](notes/beta.md "a  b")  Omega',
+      'Alpha [Beta](notes/beta.md "a  b") Omega',
+      'Alpha Beta Omega'
+    ],
+    [
+      'HTML attribute',
+      'Alpha  <span data-label="a  b">Beta</span>  Omega',
+      'Alpha <span data-label="a  b">Beta</span> Omega',
+      'Alpha Beta Omega'
+    ]
+  ])(
+    'normalizes title whitespace without mutating %s',
+    (_name, inputMarkup, headingMarkup, displayTitle) => {
+      expect(deriveExtractionTitle(inputMarkup)).toEqual({
+        displayTitle,
+        headingMarkup
+      });
+    }
+  );
+
+  it.each([
+    ['HTML comment', 'Beta <!--draft  note-->', 'Beta'],
+    ['processing instruction', 'Beta <?draft  test?>', 'Beta']
+  ])('omits a non-rendered %s from the display title', (_name, headingMarkup, displayTitle) => {
+    expect(deriveExtractionTitle(headingMarkup)).toEqual({
+      displayTitle,
+      headingMarkup
+    });
+  });
+
+  it.each([
+    [
+      'named entities',
+      'Fish &amp; Chips &NotEqualTilde;',
+      'Fish & Chips ≂̸'
+    ],
+    ['decimal entity', 'Letter &#65;', 'Letter A'],
+    ['hexadecimal entity', 'Letter &#x41;', 'Letter A']
+  ])('decodes %s in the display title', (_name, headingMarkup, displayTitle) => {
+    expect(deriveExtractionTitle(headingMarkup)).toEqual({
+      displayTitle,
+      headingMarkup
+    });
+  });
+
   it('removes only a terminal valid block ID', () => {
     expect(deriveExtractionTitle('Beta ^block-id')).toEqual({
       displayTitle: 'Beta',
