@@ -104,25 +104,67 @@ describe('analyzeExtractionDependencies inline targets', () => {
       destination: String.raw`folder/a\(b\).md#Part`,
       explicitMarkdownExtension: true,
       markdown: String.raw`[escaped](folder/a\(b\).md#Part)`,
-      path: String.raw`folder/a\(b\).md`,
+      path: 'folder/a(b).md',
       subpath: '#Part'
     },
     {
       destination: 'folder/My%20Note.md#A%20B',
       explicitMarkdownExtension: true,
       markdown: '[encoded](folder/My%20Note.md#A%20B)',
-      path: 'folder/My%20Note.md',
+      path: 'folder/My Note.md',
       subpath: '#A%20B'
     },
     {
       destination: String.raw`folder/name\#part.md`,
       explicitMarkdownExtension: true,
       markdown: String.raw`[escaped hash](folder/name\#part.md)`,
-      path: String.raw`folder/name\#part.md`,
+      path: 'folder/name#part.md',
+      subpath: ''
+    },
+    {
+      destination: 'folder/A&amp;B.md',
+      explicitMarkdownExtension: true,
+      markdown: '[entity](folder/A&amp;B.md)',
+      path: 'folder/A&B.md',
+      subpath: ''
+    },
+    {
+      destination: 'folder/%E6%9D%B1%E4%BA%AC.md',
+      explicitMarkdownExtension: true,
+      markdown: '[UTF-8](folder/%E6%9D%B1%E4%BA%AC.md)',
+      path: 'folder/東京.md',
+      subpath: ''
+    },
+    {
+      destination: 'folder%2Fnested%2Fnote.md',
+      explicitMarkdownExtension: true,
+      markdown: '[encoded separators](folder%2Fnested%2Fnote.md)',
+      path: 'folder/nested/note.md',
+      subpath: ''
+    },
+    {
+      destination: String.raw`A\#B&amp;C%20D.md#Part&amp;More`,
+      explicitMarkdownExtension: true,
+      markdown: String.raw`[interactions](A\#B&amp;C%20D.md#Part&amp;More)`,
+      path: 'A#B&C D.md',
+      subpath: '#Part&amp;More'
+    },
+    {
+      destination: 'folder/%2520.md',
+      explicitMarkdownExtension: true,
+      markdown: '[single decode](folder/%2520.md)',
+      path: 'folder/%20.md',
+      subpath: ''
+    },
+    {
+      destination: 'folder/A%26amp%3BB.md',
+      explicitMarkdownExtension: true,
+      markdown: '[no entity double decode](folder/A%26amp%3BB.md)',
+      path: 'folder/A&amp;B.md',
       subpath: ''
     }
   ])(
-    'retains significant destination syntax in $markdown',
+    'retains raw destination bytes while exposing a logical linkpath in $markdown',
     ({ destination, explicitMarkdownExtension, markdown, path, subpath }) => {
       const [target] = expectReadyTargets(markdown);
 
@@ -158,19 +200,49 @@ describe('analyzeExtractionDependencies inline targets', () => {
 
   it.each([
     {
-      linkpath: String.raw`folder/https\://plan.md`,
+      linkpath: 'folder/https://plan.md',
       source: String.raw`[relative escaped punctuation](folder/https\://plan.md)`
     },
     {
-      linkpath: 'folder/&sol;plan.md',
+      linkpath: 'folder//plan.md',
       source: '[relative entity punctuation](folder/&sol;plan.md)'
     },
     {
-      linkpath: 'folder/&#35;plan.md',
+      linkpath: 'folder/#plan.md',
       source: '[relative numeric entity](folder/&#35;plan.md)'
     }
   ])('retains the ordinary relative control $source', ({ linkpath, source }) => {
     expect(expectReadyTargets(source)[0]).toMatchObject({ linkpath });
+  });
+
+  it.each([
+    'https%3A%2F%2Fexample.com/note.md',
+    '%2Ffolder/note.md',
+    '%23Local',
+    '%5Elocal-block'
+  ])('does not collect a percent-encoded non-relative target %s', (destination) => {
+    expect(analyzeWholeSource(`[target](${destination})`)).toEqual({
+      kind: 'ready',
+      targets: []
+    });
+  });
+
+  it.each([
+    'folder/bad%.md',
+    'folder/bad%2.md',
+    'folder/bad%GG.md',
+    'folder/bad%C3%28.md'
+  ])('retains the complete logical linkpath for invalid percent bytes in %s', (linkpath) => {
+    const source = `[invalid](${linkpath}#Part)`;
+    const [target] = expectReadyTargets(source);
+
+    expect(target).toMatchObject({
+      from: source.indexOf(linkpath),
+      linkpath,
+      subpath: '#Part',
+      to: source.indexOf('#Part') + '#Part'.length
+    });
+    expect(source.slice(target?.from, target?.to)).toBe(`${linkpath}#Part`);
   });
 
   it.each([
@@ -639,6 +711,124 @@ describe('analyzeExtractionDependencies footnote boundaries', () => {
         '# Extract\n\nbody\n'
       )
     ).toEqual({ kind: 'ready', targets: [] });
+  });
+});
+
+describe('analyzeExtractionDependencies Obsidian math protection', () => {
+  it('leaves inline-math Markdown bytes untouched without hiding adjacent live syntax or creating crossings', () => {
+    const math = String.raw`$[math](math.md) ![image](math.png) [fake][REF] [^NOTE] \$ value$`;
+    const source = [
+      '# Extract',
+      math,
+      '[live](live.md)',
+      '# Keep',
+      '[ref]: reference.md',
+      '[^note]: detail',
+      ''
+    ].join('\n');
+    const destinationContent = `${math}\n[live](live.md)\n`;
+    const targets = expectReadyTargets(
+      source,
+      destinationContent,
+      getSectionRange(source, '# Extract')
+    );
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({ linkpath: 'live.md' });
+    expect(
+      rewriteMarkdownTargets(
+        destinationContent,
+        targets,
+        () => 'rewritten.md'
+      )
+    ).toBe(`${math}\n[live](rewritten.md)\n`);
+  });
+
+  it.each([
+    {
+      lineEnding: '\n',
+      math: '$$![same line](same.md) [fake][ref] [^note]$$',
+      name: 'same-line block math'
+    },
+    {
+      lineEnding: '\n',
+      math: '$$\n![multiline](multi.md)\n[ref]: fake.md\n[^note]: fake\n$$',
+      name: 'multiline block math'
+    },
+    {
+      lineEnding: '\r\n',
+      math: '$$\r\n![CRLF](crlf.md)\r\n[ref]: fake.md\r\n[^note]: fake\r\n$$',
+      name: 'CRLF block math'
+    }
+  ])('protects links, images, references, and footnotes in $name', ({
+    lineEnding,
+    math
+  }) => {
+    const source =
+      `# Extract${lineEnding}${math}${lineEnding}[live](live.md)${lineEnding}# Keep${lineEnding}[ref]: reference.md${lineEnding}[^note]: detail${lineEnding}`;
+    const destinationContent = `${math}${lineEnding}[live](live.md)${lineEnding}`;
+    const targets = expectReadyTargets(
+      source,
+      destinationContent,
+      getSectionRange(source, '# Extract')
+    );
+
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({ linkpath: 'live.md' });
+    expect(
+      rewriteMarkdownTargets(destinationContent, targets, () => 'moved.md')
+    ).toBe(`${math}${lineEnding}[live](moved.md)${lineEnding}`);
+  });
+
+  it.each([
+    {
+      name: 'escaped inline opener',
+      source: String.raw`\$[live](escaped.md)$`
+    },
+    {
+      name: 'space after inline opener',
+      source: '$ [live](space.md) $'
+    },
+    {
+      name: 'unmatched inline delimiter',
+      source: '$[live](inline.md)'
+    },
+    {
+      name: 'unmatched block delimiter',
+      source: '$$\n![live](block.png)\n'
+    }
+  ])('does not protect Markdown after an $name', ({ source }) => {
+    const targets = expectReadyTargets(source);
+
+    expect(targets).toHaveLength(1);
+  });
+
+  it('does not let math delimiters in code, comments, or frontmatter capture live Markdown', () => {
+    const source = [
+      '---',
+      '$$',
+      '---',
+      '[frontmatter adjacent](front.md)',
+      '$$',
+      '```md',
+      '$$',
+      '```',
+      '[code adjacent](code.md)',
+      '$$',
+      '<!-- $$ -->',
+      '[comment adjacent](comment.md)',
+      '$$',
+      '%% $$ %%',
+      '[Obsidian comment adjacent](obsidian.md)',
+      ''
+    ].join('\n');
+
+    expect(expectReadyTargets(source).map((target) => target.linkpath)).toEqual([
+      'front.md',
+      'code.md',
+      'comment.md',
+      'obsidian.md'
+    ]);
   });
 });
 

@@ -354,6 +354,14 @@ function createGuardedExtractionEditor(
   };
 }
 
+function assertCurrentExtractionFile(app: App, file: TFile): void {
+  const normalizedFilePath = normalizePath(file.path);
+  const currentFile = app.vault.getAbstractFileByPath(normalizedFilePath);
+  if (file.path !== normalizedFilePath || currentFile !== file) {
+    throw new TypeError('Expected the created extraction file to remain current.');
+  }
+}
+
 function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
   return {
     async create(path, content): Promise<TFile> {
@@ -364,6 +372,7 @@ function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
       return file;
     },
     delete(file): Promise<void> {
+      assertCurrentExtractionFile(app, file);
       return app.vault.delete(file);
     },
     fileExists(path): boolean {
@@ -394,6 +403,7 @@ function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
       return parent;
     },
     read(file): Promise<string> {
+      assertCurrentExtractionFile(app, file);
       return app.vault.read(file);
     },
     resolveLink(linkpath, sourcePath): null | TFile {

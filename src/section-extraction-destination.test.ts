@@ -307,6 +307,30 @@ describe('createExtractionWikilink', () => {
 });
 
 describe('prepareExtractionDestination Markdown targets', () => {
+  it('rewrites an inline Markdown destination in the duplicated heading', () => {
+    const draft = createDraftFromSource(
+      '# [Project](../Plans/Plan.md#Scope)\nbody\n'
+    );
+    const resolveLink = vi.fn(() => ({
+      extension: 'md',
+      path: 'Plans/Plan.md'
+    }));
+
+    expect(
+      prepareExtractionDestination(draft, 'Source/Alpha.md', {
+        fileExists: vi.fn(() => false),
+        getNewFileParent: vi.fn(() => ({ path: 'Extracted/Nested' })),
+        resolveLink
+      })
+    ).toMatchObject({
+      content: '# [Project](../../Plans/Plan.md#Scope)\n\nbody\n'
+    });
+    expect(resolveLink).toHaveBeenCalledExactlyOnceWith(
+      '../Plans/Plan.md',
+      'Source/Alpha.md'
+    );
+  });
+
   it.each([
     {
       expectedTarget: 'Target.md',
@@ -361,6 +385,54 @@ describe('prepareExtractionDestination Markdown targets', () => {
     });
     expect(resolveLink).toHaveBeenCalledExactlyOnceWith(
       sourceTarget,
+      'Source/Alpha.md'
+    );
+  });
+
+  it.each([
+    {
+      logicalLinkpath: 'A(B).md',
+      sourceTarget: String.raw`A\(B\).md`
+    },
+    {
+      logicalLinkpath: 'A&B.md',
+      sourceTarget: 'A&amp;B.md'
+    },
+    {
+      logicalLinkpath: 'My Note.md',
+      sourceTarget: 'My%20Note.md'
+    },
+    {
+      logicalLinkpath: '東京/Note.md',
+      sourceTarget: '%E6%9D%B1%E4%BA%AC%2FNote.md'
+    },
+    {
+      logicalLinkpath: 'bad%GG.md',
+      sourceTarget: 'bad%GG.md'
+    }
+  ])('passes the logical linkpath $logicalLinkpath to the destination resolver', ({
+    logicalLinkpath,
+    sourceTarget
+  }) => {
+    const draft = createDraftFromSource(
+      `# Beta\n[Target](${sourceTarget}#Part)\n`
+    );
+    const resolveLink = vi.fn(() => ({
+      extension: 'md',
+      path: 'Notes/Resolved.md'
+    }));
+
+    expect(
+      prepareExtractionDestination(draft, 'Source/Alpha.md', {
+        fileExists: vi.fn(() => false),
+        getNewFileParent: vi.fn(() => ({ path: 'Notes' })),
+        resolveLink
+      })
+    ).toMatchObject({
+      content: '# Beta\n\n[Target](Resolved.md#Part)\n'
+    });
+    expect(resolveLink).toHaveBeenCalledExactlyOnceWith(
+      logicalLinkpath,
       'Source/Alpha.md'
     );
   });

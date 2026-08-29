@@ -108,8 +108,9 @@ export function planSectionExtraction(
   const destinationContent = `# ${title.headingMarkup}${lineEnding}${lineEnding}${destinationBody}`;
   const dependencyAnalysis = analyzeExtractionDependencies(
     source,
-    section.range,
-    destinationContent
+    sourceBodyRange,
+    destinationContent,
+    { from: section.heading.lineStart, to: section.heading.syntaxEnd }
   );
   if (dependencyAnalysis.kind === 'invalid') {
     return dependencyAnalysis;

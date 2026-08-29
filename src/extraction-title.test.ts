@@ -161,6 +161,37 @@ describe('sanitizeFilenameStem', () => {
     );
   });
 
+  it('replaces every C1 control character without damaging adjacent printable Unicode', () => {
+    const c1Controls = String.fromCodePoint(
+      ...Array.from(
+        { length: 0x20 },
+        (_value, index) => 0x80 + index
+      )
+    );
+
+    expect(sanitizeFilenameStem(`Résumé${c1Controls}東京`)).toBe(
+      'Résumé 東京'
+    );
+  });
+
+  it('turns C1 controls into byte-budgeted separators before filename shortening', () => {
+    const unnumberedStem = sanitizeFilenameStem(
+      `${'A'.repeat(178)}\u{80}B`
+    );
+    const numberedStem = sanitizeFilenameStem(
+      `${'A'.repeat(176)}\u{9F}B`
+    );
+
+    expect(unnumberedStem).toBe(`${'A'.repeat(178)} B`);
+    expect(numberedStem).toBe(`${'A'.repeat(176)} B`);
+    expect(createNumberedFilename(unnumberedStem ?? '', 0)).toBe(
+      `${'A'.repeat(178)} B.md`
+    );
+    expect(createNumberedFilename(numberedStem ?? '', 1)).toBe(
+      `${'A'.repeat(176)} B 1.md`
+    );
+  });
+
   it('trims leading and trailing spaces and periods', () => {
     expect(sanitizeFilenameStem('  ...Beta... title...  ')).toBe(
       'Beta... title'

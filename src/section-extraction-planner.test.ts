@@ -354,6 +354,87 @@ describe('planSectionExtraction dependencies', () => {
       reason: 'cross-boundary-reference'
     });
   });
+
+  it.each([
+    {
+      definition: '[shared]: note.md',
+      heading: '[Project][shared]',
+      name: 'reference link with its definition in the removed body',
+      placement: 'inside'
+    },
+    {
+      definition: '[shared]: note.md',
+      heading: '[Project][shared]',
+      name: 'reference link with its definition outside the section',
+      placement: 'outside'
+    },
+    {
+      definition: '[^shared]: detail',
+      heading: 'Project[^shared]',
+      name: 'footnote with its definition in the removed body',
+      placement: 'inside'
+    },
+    {
+      definition: '[^shared]: detail',
+      heading: 'Project[^shared]',
+      name: 'footnote with its definition outside the section',
+      placement: 'outside'
+    },
+    {
+      definition: '[shared]: image.png',
+      heading: '![Project map][shared]',
+      name: 'reference image',
+      placement: 'inside'
+    },
+    {
+      definition: '[Project map]: image.png',
+      heading: '![Project map][]',
+      name: 'collapsed reference image',
+      placement: 'outside'
+    },
+    {
+      definition: '[Project map]: image.png',
+      heading: '![Project map]',
+      name: 'shortcut reference image',
+      placement: 'inside'
+    },
+    {
+      definition: '[shared]: note.md',
+      heading: '[Project][SHARED]',
+      name: 'case-normalized reference link',
+      placement: 'outside'
+    }
+  ])('rejects a duplicated heading containing a definition-backed $name', ({
+    definition,
+    heading,
+    placement
+  }) => {
+    const source = placement === 'inside'
+      ? `# ${heading}\nbody\n\n${definition}\n# Keep\nkept\n`
+      : `# ${heading}\nbody\n# Keep\n${definition}\n`;
+
+    expect(planSectionExtraction(source, source.indexOf('body'))).toEqual({
+      kind: 'invalid',
+      reason: 'cross-boundary-reference'
+    });
+  });
+
+  it('allows an inline Markdown link in the duplicated heading and collects its logical target', () => {
+    const source = '# [Project](../Plans/Plan.md#Scope)\nbody\n';
+    const draft = expectReady(source, source.indexOf('body'));
+    const destination = '../Plans/Plan.md#Scope';
+
+    expect(draft.relativeTargets).toEqual([
+      {
+        explicitMarkdownExtension: true,
+        from: draft.destinationContent.indexOf(destination),
+        kind: 'link',
+        linkpath: '../Plans/Plan.md',
+        subpath: '#Scope',
+        to: draft.destinationContent.indexOf(destination) + destination.length
+      }
+    ]);
+  });
 });
 
 describe('createExtractionSourceEdit', () => {

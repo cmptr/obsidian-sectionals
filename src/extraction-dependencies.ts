@@ -78,15 +78,18 @@ const FOOTNOTE_LITERAL_NODE_NAMES = new Set([
 ]);
 const FOOTNOTE_CONTINUATION = /^(?:\t| {2,})/u;
 const LABEL_SEPARATOR_LENGTH = 2;
+const MATH_BLOCK_DELIMITER = '$$';
+const MATH_DELIMITER_WHITESPACE = new Set([' ', '\t', '\n', '\r']);
 const URI_SCHEME = /^[a-z][a-z\d+.-]*:/iu;
 const REFERENCE_WHITESPACE = /[\t\n\r ]+/gu;
 
 export function analyzeExtractionDependencies(
   source: string,
-  sectionRange: MarkdownRange,
-  destinationContent: string
+  extractedRange: MarkdownRange,
+  destinationContent: string,
+  duplicatedRange?: MarkdownRange
 ): DependencyAnalysis {
-  if (hasCrossBoundaryReference(source, sectionRange)) {
+  if (hasCrossBoundaryReference(source, extractedRange, duplicatedRange)) {
     return { kind: 'invalid', reason: 'cross-boundary-reference' };
   }
 
@@ -213,6 +216,62 @@ function collectFootnoteOccurrences(
   }
 }
 
+function collectInlineMathRanges(
+  markdown: string,
+  from: number,
+  to: number,
+  delimiterExcludedRanges: readonly MarkdownRange[],
+  mathRanges: MarkdownRange[]
+): void {
+  let inlineFrom: number | undefined;
+  let precedingBackslashes = 0;
+  let index = from;
+  while (index < to) {
+    const character = markdown[index];
+    if (character === '\\') {
+      precedingBackslashes += 1;
+      index += 1;
+      continue;
+    }
+    const isDelimiterEscaped = precedingBackslashes % LABEL_SEPARATOR_LENGTH === 1;
+    precedingBackslashes = 0;
+    if (character === '\n' || character === '\r') {
+      inlineFrom = undefined;
+      index += 1;
+      continue;
+    }
+    if (
+      character !== '$'
+      || isDelimiterEscaped
+      || isProtected(index, delimiterExcludedRanges)
+    ) {
+      index += 1;
+      continue;
+    }
+    if (
+      index + MATH_BLOCK_DELIMITER.length <= to
+      && markdown.startsWith(MATH_BLOCK_DELIMITER, index)
+    ) {
+      index += MATH_BLOCK_DELIMITER.length;
+      continue;
+    }
+    if (inlineFrom === undefined) {
+      const followingCharacter = markdown[index + 1];
+      if (
+        index + 1 < to
+        && followingCharacter !== '$'
+        && !isMathDelimiterWhitespace(followingCharacter)
+      ) {
+        inlineFrom = index;
+      }
+    } else if (!isMathDelimiterWhitespace(markdown[index - 1])) {
+      mathRanges.push({ from: inlineFrom, to: index + 1 });
+      inlineFrom = undefined;
+    }
+    index += 1;
+  }
+}
+
 function collectMarkdownLines(source: string): readonly MarkdownLine[] {
   const lines: MarkdownLine[] = [];
   let lineStart = 0;
@@ -230,6 +289,83 @@ function collectMarkdownLines(source: string): readonly MarkdownLine[] {
     lineStart = newline + 1;
   }
   return lines;
+}
+
+function collectMathBlockRanges(
+  markdown: string,
+  from: number,
+  to: number,
+  delimiterExcludedRanges: readonly MarkdownRange[]
+): readonly MarkdownRange[] {
+  const blockRanges: MarkdownRange[] = [];
+  let blockFrom: number | undefined;
+  let precedingBackslashes = 0;
+  let index = from;
+  while (index < to) {
+    const character = markdown[index];
+    if (character === '\\') {
+      precedingBackslashes += 1;
+      index += 1;
+      continue;
+    }
+    const isDelimiterEscaped = precedingBackslashes % LABEL_SEPARATOR_LENGTH === 1;
+    precedingBackslashes = 0;
+    if (
+      character === '$'
+      && !isDelimiterEscaped
+      && !isProtected(index, delimiterExcludedRanges)
+      && index + MATH_BLOCK_DELIMITER.length <= to
+      && markdown.startsWith(MATH_BLOCK_DELIMITER, index)
+    ) {
+      if (blockFrom === undefined) {
+        blockFrom = index;
+      } else {
+        blockRanges.push({
+          from: blockFrom,
+          to: index + MATH_BLOCK_DELIMITER.length
+        });
+        blockFrom = undefined;
+      }
+      index += MATH_BLOCK_DELIMITER.length;
+      continue;
+    }
+    index += 1;
+  }
+  return blockRanges;
+}
+
+function collectMathRangesInSegment(
+  markdown: string,
+  from: number,
+  to: number,
+  delimiterExcludedRanges: readonly MarkdownRange[],
+  mathRanges: MarkdownRange[]
+): void {
+  const blockRanges = collectMathBlockRanges(
+    markdown,
+    from,
+    to,
+    delimiterExcludedRanges
+  );
+  let inlineSegmentFrom = from;
+  for (const blockRange of blockRanges) {
+    collectInlineMathRanges(
+      markdown,
+      inlineSegmentFrom,
+      blockRange.from,
+      delimiterExcludedRanges,
+      mathRanges
+    );
+    mathRanges.push(blockRange);
+    inlineSegmentFrom = blockRange.to;
+  }
+  collectInlineMathRanges(
+    markdown,
+    inlineSegmentFrom,
+    to,
+    delimiterExcludedRanges,
+    mathRanges
+  );
 }
 
 function collectReferenceOccurrences(
@@ -295,22 +431,32 @@ function collectRelativeTargets(markdown: string): RelativeMarkdownTarget[] {
     const from = node.from + (isAngleDestination ? 1 : 0);
     const to = node.to - (isAngleDestination ? 1 : 0);
     const destination = markdown.slice(from, to);
-    if (!isRelativeDestination(destination)) {
+    const split = splitDestination(destination);
+    const logicalLinkpath = decodeLogicalLinkpath(split.linkpath);
+    if (!isRelativeDestination(logicalLinkpath)) {
       continue;
     }
-    const split = splitDestination(destination);
 
     targets.push({
-      explicitMarkdownExtension: /\.md$/iu.test(split.linkpath),
+      explicitMarkdownExtension: /\.md$/iu.test(logicalLinkpath),
       from,
       kind,
-      linkpath: split.linkpath,
+      linkpath: logicalLinkpath,
       subpath: split.subpath,
       to
     });
   }
 
   return targets;
+}
+
+function decodeLogicalLinkpath(rawLinkpath: string): string {
+  const markdownDecodedLinkpath = decodeMarkdownSyntax(rawLinkpath);
+  try {
+    return decodeURIComponent(markdownDecodedLinkpath);
+  } catch {
+    return markdownDecodedLinkpath;
+  }
 }
 
 function decodeMarkdownSyntax(markdown: string): string {
@@ -359,6 +505,37 @@ function extractReferenceUseLabel(markdown: string): null | string {
       : secondLabel;
   }
   return reference.slice(1, -1);
+}
+
+function findObsidianMathRanges(
+  markdown: string,
+  excludedRanges: readonly MarkdownRange[],
+  delimiterExcludedRanges: readonly MarkdownRange[]
+): readonly MarkdownRange[] {
+  const mathRanges: MarkdownRange[] = [];
+  let segmentFrom = 0;
+  for (const excludedRange of excludedRanges) {
+    if (segmentFrom < excludedRange.from) {
+      collectMathRangesInSegment(
+        markdown,
+        segmentFrom,
+        excludedRange.from,
+        delimiterExcludedRanges,
+        mathRanges
+      );
+    }
+    segmentFrom = Math.max(segmentFrom, excludedRange.to);
+  }
+  if (segmentFrom < markdown.length) {
+    collectMathRangesInSegment(
+      markdown,
+      segmentFrom,
+      markdown.length,
+      delimiterExcludedRanges,
+      mathRanges
+    );
+  }
+  return mathRanges;
 }
 
 function findParentNode(
@@ -417,7 +594,8 @@ function getTargetKind(parentName: string | undefined): MarkdownTargetKind | nul
 
 function hasCrossBoundaryReference(
   source: string,
-  sectionRange: MarkdownRange
+  extractedRange: MarkdownRange,
+  duplicatedRange?: MarkdownRange
 ): boolean {
   const parsed = parseMarkdown(source);
   const labels = collectReferenceOccurrences(source, parsed);
@@ -427,9 +605,15 @@ function hasCrossBoundaryReference(
     if (occurrences.definitions.length === 0) {
       continue;
     }
+    if (
+      duplicatedRange !== undefined
+      && occurrences.uses.some((range) => getBoundarySide(range, duplicatedRange) !== 'outside')
+    ) {
+      return true;
+    }
 
     const sides = [...occurrences.definitions, ...occurrences.uses].map(
-      (range) => getBoundarySide(range, sectionRange)
+      (range) => getBoundarySide(range, extractedRange)
     );
     if (sides.includes('crossing') || new Set(sides).size > 1) {
       return true;
@@ -444,6 +628,13 @@ function isEscaped(source: string, offset: number): boolean {
     backslashes += 1;
   }
   return backslashes % LABEL_SEPARATOR_LENGTH === 1;
+}
+
+function isMathDelimiterWhitespace(
+  character: string | undefined
+): boolean {
+  return character !== undefined
+    && MATH_DELIMITER_WHITESPACE.has(character);
 }
 
 function isProtected(
@@ -471,13 +662,12 @@ function isProtected(
   return false;
 }
 
-function isRelativeDestination(destination: string): boolean {
-  const decodedDestination = decodeMarkdownSyntax(destination);
-  return decodedDestination !== ''
-    && !decodedDestination.startsWith('/')
-    && !decodedDestination.startsWith('#')
-    && !decodedDestination.startsWith('^')
-    && !URI_SCHEME.test(decodedDestination);
+function isRelativeDestination(logicalLinkpath: string): boolean {
+  return logicalLinkpath !== ''
+    && !logicalLinkpath.startsWith('/')
+    && !logicalLinkpath.startsWith('#')
+    && !logicalLinkpath.startsWith('^')
+    && !URI_SCHEME.test(logicalLinkpath);
 }
 
 function isWikilinkLike(source: string, node: MarkdownNode): boolean {
@@ -529,9 +719,18 @@ function parseMarkdown(markdown: string): ParsedMarkdown {
     }
   });
 
-  const protectedRanges = sortAndMergeRanges([
+  const protectedRangesWithoutMath = sortAndMergeRanges([
     ...parseMarkdownStructure(markdown).protectedRanges,
     ...codeRanges
+  ]);
+  const mathRanges = findObsidianMathRanges(
+    markdown,
+    protectedRangesWithoutMath,
+    sortAndMergeRanges(literalRanges)
+  );
+  const protectedRanges = sortAndMergeRanges([
+    ...protectedRangesWithoutMath,
+    ...mathRanges
   ]);
   return {
     directUrlParents,

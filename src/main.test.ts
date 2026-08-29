@@ -1007,6 +1007,137 @@ describe('SectionalsPlugin', () => {
     expect(app.vault.getAbstractFileByPath('Extracted/created.md')).toBeNull();
   });
 
+  it('passes a decoded logical Markdown linkpath through the real destination adapter', async () => {
+    const source = String.raw`# Extract me
+[Target](../Links/A\(B\)%20&amp;%E6%9D%B1%E4%BA%AC%2FNote.md#Part)
+`;
+    const app = ObsidianApp.createConfigured__({
+      files: {
+        'Folder/source.md': source,
+        'Links/target.md': 'target'
+      }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    const targetFile = app.vault.getAbstractFileByPath('Links/target.md');
+    if (
+      !(sourceFile instanceof PublicTFile)
+      || !(sourceFile instanceof TFile)
+      || !(targetFile instanceof PublicTFile)
+      || !(targetFile instanceof TFile)
+    ) {
+      throw new TypeError('Expected logical-link files in the fake vault.');
+    }
+    const getFirstLinkpathDestination = vi.spyOn(
+      app.metadataCache,
+      'getFirstLinkpathDest'
+    ).mockReturnValue(targetFile);
+    vi.spyOn(app.metadataCache, 'fileToLinktext').mockReturnValue('Extract me');
+    const fixture = createEditor(source, source.indexOf('[Target]'));
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands(asApp(app), {
+        execute: executeSectionExtraction,
+        notify: vi.fn(),
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          createMarkdownView(sourceFile, fixture.editor)
+        )
+    ).toBe(true);
+    await completion;
+
+    expect(getFirstLinkpathDestination).toHaveBeenNthCalledWith(
+      1,
+      '../Links/A(B) &東京/Note.md',
+      'Folder/source.md'
+    );
+  });
+
+  it('retains a different same-path destination inserted before rollback read', async () => {
+    const harness = createIdentityHarness();
+    const originalCreate = harness.app.vault.create.bind(harness.app.vault);
+    const originalDelete = harness.app.vault.delete.bind(harness.app.vault);
+    let replacement: SourceIdentityFile | undefined;
+    let didReplaceDestination = false;
+    vi.spyOn(harness.app.vault, 'create').mockImplementation(
+      async (path, content, options) => {
+        const created = await originalCreate(path, content, options);
+        if (path === IDENTITY_DESTINATION_PATH && !didReplaceDestination) {
+          didReplaceDestination = true;
+          await originalDelete(created);
+          const recreated = await originalCreate(path, content, options);
+          if (
+            !(recreated instanceof PublicTFile)
+            || !(recreated instanceof TFile)
+          ) {
+            throw new TypeError('Expected a replacement destination file.');
+          }
+          replacement = recreated;
+        }
+        return created;
+      }
+    );
+
+    await invokeIdentityExtraction(harness);
+
+    expect(
+      harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
+    ).toBe(replacement);
+    expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+    expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
+    expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
+      `Extraction stopped, but the new note could not be removed: ${IDENTITY_DESTINATION_PATH}`
+    );
+  });
+
+  it('retains a different same-path destination inserted before rollback delete', async () => {
+    const harness = createIdentityHarness();
+    const originalCreate = harness.app.vault.create.bind(harness.app.vault);
+    const originalDelete = harness.app.vault.delete.bind(harness.app.vault);
+    const originalRead = harness.app.vault.read.bind(harness.app.vault);
+    let destinationReadCount = 0;
+    let replacement: SourceIdentityFile | undefined;
+    vi.spyOn(harness.app.vault, 'read').mockImplementation(async (file) => {
+      const content = await originalRead(file);
+      if (file.path === IDENTITY_DESTINATION_PATH) {
+        destinationReadCount += 1;
+        if (destinationReadCount === 1) {
+          harness.view.file = harness.otherFile;
+        } else if (destinationReadCount === 2) {
+          await originalDelete(file);
+          const recreated = await originalCreate(file.path, content);
+          if (
+            !(recreated instanceof PublicTFile)
+            || !(recreated instanceof TFile)
+          ) {
+            throw new TypeError('Expected a replacement destination file.');
+          }
+          replacement = recreated;
+        }
+      }
+      return content;
+    });
+
+    await invokeIdentityExtraction(harness);
+
+    expect(
+      harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
+    ).toBe(replacement);
+    expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+    expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
+    expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
+      `Extraction stopped, but the new note could not be removed: ${IDENTITY_DESTINATION_PATH}`
+    );
+  });
+
   it('cancels and rolls back when the source file is renamed during extraction', async () => {
     await runPostCreateIdentityMutation(async (harness) => {
       await harness.app.vault.rename(

@@ -37,8 +37,9 @@ const PROTECTED_HEADING_MARKUP_NODE_NAMES = new Set([
   'ProcessingInstruction',
   'URL'
 ]);
-const ASCII_CONTROL_CHARACTER_MAX = 31;
-const ASCII_DELETE_CHARACTER = 127;
+const C0_CONTROL_CHARACTER_MAX = 0x1F;
+const C1_CONTROL_CHARACTER_MAX = 0x9F;
+const C1_CONTROL_CHARACTER_MIN = 0x7F;
 const FILENAME_EXTENSION = '.md';
 const RESERVED_FILENAME_CHARACTERS = new Set(String.raw`/\:*?"<>|#^[]`);
 const TERMINAL_BLOCK_ID = /\s+\^[a-z\d-]+\s*$/iu;
@@ -134,8 +135,11 @@ function isFilenameCharacterReserved(character: string): boolean {
     return false;
   }
   return (
-    characterCode <= ASCII_CONTROL_CHARACTER_MAX
-    || characterCode === ASCII_DELETE_CHARACTER
+    characterCode <= C0_CONTROL_CHARACTER_MAX
+    || (
+      characterCode >= C1_CONTROL_CHARACTER_MIN
+      && characterCode <= C1_CONTROL_CHARACTER_MAX
+    )
     || RESERVED_FILENAME_CHARACTERS.has(character)
   );
 }
