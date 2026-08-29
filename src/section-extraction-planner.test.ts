@@ -282,6 +282,79 @@ describe('planSectionExtraction destination content', () => {
   });
 });
 
+describe('planSectionExtraction dependencies', () => {
+  it('returns destination-relative link and embed target ranges', () => {
+    const source = [
+      '# Project',
+      'See [plan](../Plans/Plan.md#Scope "Open") and ![map](assets/map.png).',
+      ''
+    ].join('\n');
+    const draft = expectReady(source, source.indexOf('See'));
+    const linkDestination = '../Plans/Plan.md#Scope';
+    const embedDestination = 'assets/map.png';
+
+    expect(draft.relativeTargets).toEqual([
+      {
+        explicitMarkdownExtension: true,
+        from: draft.destinationContent.indexOf(linkDestination),
+        kind: 'link',
+        linkpath: '../Plans/Plan.md',
+        subpath: '#Scope',
+        to: draft.destinationContent.indexOf(linkDestination)
+          + linkDestination.length
+      },
+      {
+        explicitMarkdownExtension: false,
+        from: draft.destinationContent.indexOf(embedDestination),
+        kind: 'embed',
+        linkpath: embedDestination,
+        subpath: '',
+        to: draft.destinationContent.indexOf(embedDestination)
+          + embedDestination.length
+      }
+    ]);
+  });
+
+  it('returns a destination-relative target for a self-contained reference definition', () => {
+    const source = [
+      '# Project',
+      '[plan][shared]',
+      '',
+      '[shared]: ../Plans/Plan.md#Scope "Open"',
+      ''
+    ].join('\n');
+    const draft = expectReady(source, source.indexOf('[plan]'));
+    const destination = '../Plans/Plan.md#Scope';
+
+    expect(draft.relativeTargets).toEqual([
+      {
+        explicitMarkdownExtension: true,
+        from: draft.destinationContent.indexOf(destination),
+        kind: 'reference-definition',
+        linkpath: '../Plans/Plan.md',
+        subpath: '#Scope',
+        to: draft.destinationContent.indexOf(destination) + destination.length
+      }
+    ]);
+  });
+
+  it.each([
+    {
+      name: 'reference link',
+      source: '# Extract\n[inside][shared]\n# Keep\n[shared]: note.md\n'
+    },
+    {
+      name: 'footnote',
+      source: '# Extract\nText[^shared].\n# Keep\n[^shared]: detail\n'
+    }
+  ])('rejects a cross-boundary $name', ({ source }) => {
+    expect(planSectionExtraction(source, source.indexOf('Extract'))).toEqual({
+      kind: 'invalid',
+      reason: 'cross-boundary-reference'
+    });
+  });
+});
+
 describe('createExtractionSourceEdit', () => {
   it('replaces an EOF body with one canonical wikilink paragraph', () => {
     const source = '# Beta\nbody\n';

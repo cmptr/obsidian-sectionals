@@ -1,6 +1,8 @@
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible type imports compact.
+import type { RelativeMarkdownTarget } from './extraction-dependencies.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structure imports compact.
 import type { MarkdownHeading, MarkdownRange } from './markdown-structure.ts';
 
+import { analyzeExtractionDependencies } from './extraction-dependencies.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible title imports compact.
 import { deriveExtractionTitle, sanitizeFilenameStem } from './extraction-title.ts';
 import { parseMarkdownStructure } from './markdown-structure.ts';
@@ -24,6 +26,7 @@ export interface SectionExtractionDraft {
   readonly displayTitle: string;
   readonly filenameStem: string;
   readonly lineEnding: ExtractionLineEnding;
+  readonly relativeTargets: readonly RelativeMarkdownTarget[];
   readonly sectionRange: MarkdownRange;
   readonly sourceBodyRange: MarkdownRange;
 }
@@ -111,13 +114,23 @@ export function planSectionExtraction(
     section.heading,
     descendants
   );
+  const destinationContent = `# ${title.headingMarkup}${lineEnding}${lineEnding}${destinationBody}`;
+  const dependencyAnalysis = analyzeExtractionDependencies(
+    source,
+    section.range,
+    destinationContent
+  );
+  if (dependencyAnalysis.kind === 'invalid') {
+    return dependencyAnalysis;
+  }
 
   return {
     draft: {
-      destinationContent: `# ${title.headingMarkup}${lineEnding}${lineEnding}${destinationBody}`,
+      destinationContent,
       displayTitle: title.displayTitle,
       filenameStem,
       lineEnding,
+      relativeTargets: dependencyAnalysis.targets,
       sectionRange: section.range,
       sourceBodyRange
     },
