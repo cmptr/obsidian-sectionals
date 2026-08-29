@@ -80,6 +80,27 @@ describe('analyzeExtractionDependencies inline targets', () => {
 
   it.each([
     {
+      destination: 'folder/a((b)c).md#Part',
+      explicitMarkdownExtension: true,
+      markdown: '[nested](folder/a((b)c).md#Part)',
+      path: 'folder/a((b)c).md',
+      subpath: '#Part'
+    },
+    {
+      destination: 'folder/note.md',
+      explicitMarkdownExtension: true,
+      markdown: '[multiline](\n  folder/note.md\n  "Title"\n)',
+      path: 'folder/note.md',
+      subpath: ''
+    },
+    {
+      destination: 'folder/parenthesized.md',
+      explicitMarkdownExtension: true,
+      markdown: '[parenthesized title](folder/parenthesized.md\n  (Title))',
+      path: 'folder/parenthesized.md',
+      subpath: ''
+    },
+    {
       destination: String.raw`folder/a\(b\).md#Part`,
       explicitMarkdownExtension: true,
       markdown: String.raw`[escaped](folder/a\(b\).md#Part)`,
@@ -123,9 +144,33 @@ describe('analyzeExtractionDependencies inline targets', () => {
     '![data](data:image/png;base64,abc)',
     '[root](/folder/note.md)',
     '[heading](#Local)',
-    '[block](^local-block)'
+    '[block](^local-block)',
+    String.raw`[escaped scheme](https\://example.com/note.md)`,
+    String.raw`[escaped root](\/folder/note.md)`,
+    '[named protocol relative](&sol;&sol;example.com/note.md)',
+    String.raw`[escaped same heading](\#Local)`,
+    '[decimal root](&#47;folder/note.md)',
+    '[hex same block](&#x5e;local-block)',
+    '[entity scheme](https&#58;//example.com/note.md)'
   ])('does not collect the non-relative target %s', (source) => {
     expect(analyzeWholeSource(source)).toEqual({ kind: 'ready', targets: [] });
+  });
+
+  it.each([
+    {
+      linkpath: String.raw`folder/https\://plan.md`,
+      source: String.raw`[relative escaped punctuation](folder/https\://plan.md)`
+    },
+    {
+      linkpath: 'folder/&sol;plan.md',
+      source: '[relative entity punctuation](folder/&sol;plan.md)'
+    },
+    {
+      linkpath: 'folder/&#35;plan.md',
+      source: '[relative numeric entity](folder/&#35;plan.md)'
+    }
+  ])('retains the ordinary relative control $source', ({ linkpath, source }) => {
+    expect(expectReadyTargets(source)[0]).toMatchObject({ linkpath });
   });
 
   it.each([
@@ -244,6 +289,134 @@ describe('analyzeExtractionDependencies reference boundaries', () => {
     ).toEqual({ kind: 'invalid', reason: 'cross-boundary-reference' });
   });
 
+  it.each([
+    {
+      definition: '[ref]: note.md',
+      name: 'full reference',
+      use: '[inside][ref]'
+    },
+    {
+      definition: '[ref]: note.md',
+      name: 'collapsed reference',
+      use: '[ref][]'
+    },
+    {
+      definition: '[ref]: note.md',
+      name: 'shortcut reference',
+      use: '[ref]'
+    },
+    {
+      definition: '[ref]: image.png',
+      name: 'reference image',
+      use: '![inside][ref]'
+    },
+    {
+      definition: '[ref]: note.md',
+      name: 'ASCII normalized case',
+      use: '[inside][REF]'
+    },
+    {
+      definition: '[Σ]: note.md',
+      name: 'sigma and final sigma case folding',
+      use: '[inside][ς]'
+    },
+    {
+      definition: '[straße]: note.md',
+      name: 'sharp s full case folding',
+      use: '[inside][STRASSE]'
+    },
+    {
+      definition: '[a b]: note.md',
+      name: 'collapsed label whitespace',
+      use: '[inside][A  B]'
+    },
+    {
+      definition: '[a&b]: note.md',
+      name: 'escaped label punctuation',
+      use: String.raw`[inside][A\&B]`
+    },
+    {
+      definition: '[a&b]: note.md',
+      name: 'entity label punctuation',
+      use: '[inside][A&amp;B]'
+    },
+    {
+      definition: '[ref]:\n  note.md\n  (Multiline title)',
+      name: 'multiline reference definition',
+      use: '[inside][ref]'
+    }
+  ])(
+    'rejects definition-outside/use-inside for $name',
+    ({ definition, use }) => {
+      const source = `# Extract\n${use}\n# Keep\n${definition}\n`;
+
+      expect(
+        analyzeExtractionDependencies(
+          source,
+          getSectionRange(source, '# Extract'),
+          '# Extract\n\nbody\n'
+        )
+      ).toEqual({ kind: 'invalid', reason: 'cross-boundary-reference' });
+    }
+  );
+
+  it('does not rescan the syntax-node array for each parsed link', () => {
+    const linkCount = 250;
+    const source = Array.from(
+      { length: linkCount },
+      (_value, index) => `[link ${String(index)}](notes/note-${String(index)}.md)`
+    ).join(' ');
+    const originalSome = Array.prototype.some;
+    let syntaxNodeVisits = 0;
+    const someSpy = vi.spyOn(Array.prototype, 'some').mockImplementation(
+      function doesSomeMatch(
+        this: unknown[],
+        predicate: (value: unknown, index: number, array: unknown[]) => unknown,
+        thisArgument?: unknown
+      ): boolean {
+        const first = this[0];
+        const isSyntaxNodeArray = typeof first === 'object'
+          && first !== null
+          && 'name' in first
+          && first.name === 'Document';
+        return Reflect.apply(originalSome, this, [
+          (value: unknown, index: number, array: unknown[]): unknown => {
+            if (isSyntaxNodeArray) {
+              syntaxNodeVisits += 1;
+            }
+            return predicate.call(thisArgument, value, index, array);
+          }
+        ]);
+      }
+    );
+
+    try {
+      expect(analyzeWholeSource(source).kind).toBe('ready');
+    } finally {
+      someSpy.mockRestore();
+    }
+    expect(syntaxNodeVisits).toBe(0);
+  });
+
+  it.each([
+    {
+      name: 'frontmatter',
+      source: '---\n[ref]: fake.md\n---\n# Extract\n[inside][ref]\n'
+    },
+    {
+      name: 'Obsidian comment',
+      source: '%%\n\n[ref]: fake.md\n\n%%\n# Extract\n[inside][ref]\n'
+    }
+  ])('ignores a fake reference definition in $name', ({ source }) => {
+    expect(
+      analyzeExtractionDependencies(
+        source,
+        getSectionRange(source, '# Extract'),
+        '# Extract\n\n[inside][ref]\n'
+      )
+    ).toEqual({ kind: 'ready', targets: [] });
+  });
+
   it('ignores escaped and code-contained reference-like text', () => {
     const source = [
       '# Extract',
@@ -306,6 +479,47 @@ describe('analyzeExtractionDependencies footnote boundaries', () => {
       source: '# Extract\nText[^note].\n\n[^note]: detail\n# Keep\nAgain[^note].\n'
     }
   ])('rejects a footnote with $name', ({ source }) => {
+    expect(
+      analyzeExtractionDependencies(
+        source,
+        getSectionRange(source, '# Extract'),
+        '# Extract\n\nbody\n'
+      )
+    ).toEqual({ kind: 'invalid', reason: 'cross-boundary-reference' });
+  });
+
+  it.each([
+    ['link destination', '[link](note[^id].md)'],
+    ['link title', '[link](note.md "title [^id]")'],
+    ['inline raw HTML attribute', '<span data-note="[^id]">text</span>'],
+    ['raw HTML block attribute', '<div data-note="[^id]">\ntext\n</div>'],
+    ['inline code', '`[^id]`'],
+    ['fenced code', '```md\n[^id]\n```'],
+    ['HTML comment', '<!-- [^id] -->'],
+    ['Obsidian comment', '%% [^id] %%']
+  ])('ignores footnote-like text in a %s', (_name, literal) => {
+    const source = `# Extract\n${literal}\n# Keep\n[^id]: detail\n`;
+
+    expect(
+      analyzeExtractionDependencies(
+        source,
+        getSectionRange(source, '# Extract'),
+        '# Extract\n\nbody\n'
+      )
+    ).toEqual({ kind: 'ready', targets: [] });
+  });
+
+  it('still detects a live footnote beside literal false positives', () => {
+    const source = [
+      '# Extract',
+      '[link](note[^id].md "title [^id]")',
+      '<span data-note="[^id]">text</span>',
+      'Live[^id].',
+      '# Keep',
+      '[^id]: detail',
+      ''
+    ].join('\n');
+
     expect(
       analyzeExtractionDependencies(
         source,
@@ -390,6 +604,53 @@ describe('rewriteMarkdownTargets', () => {
         (target) => target.linkpath === 'one.md' ? 'One' : null
       )
     ).toBeNull();
+  });
+
+  it.each([
+    {
+      from: -1,
+      name: 'negative',
+      to: 4
+    },
+    {
+      from: 8,
+      name: 'reversed',
+      to: 4
+    },
+    {
+      from: 5,
+      name: 'zero-length',
+      to: 5
+    },
+    {
+      from: 2.5,
+      name: 'fractional',
+      to: 5
+    },
+    {
+      from: Number.MAX_SAFE_INTEGER + 1,
+      name: 'unsafe integer',
+      to: Number.MAX_SAFE_INTEGER + 2
+    },
+    {
+      from: 12,
+      name: 'out of bounds',
+      to: 20
+    }
+  ])('throws before resolving a $name range', ({ from, to }) => {
+    const resolve = vi.fn(() => 'replacement');
+    const target = {
+      explicitMarkdownExtension: false,
+      from,
+      kind: 'link' as const,
+      linkpath: 'target',
+      subpath: '',
+      to
+    };
+
+    expect(() => rewriteMarkdownTargets('0123456789abcdef', [target], resolve))
+      .toThrow(TypeError);
+    expect(resolve).not.toHaveBeenCalled();
   });
 
   it.each([

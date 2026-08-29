@@ -2,6 +2,7 @@ import { parser } from '@lezer/markdown';
 
 import type { MarkdownRange } from './markdown-structure.ts';
 
+import { decodeMarkdownCharacterReference } from './markdown-character-reference.ts';
 import { parseMarkdownStructure } from './markdown-structure.ts';
 
 export type DependencyAnalysis =
@@ -36,9 +37,17 @@ interface MarkdownNode {
 }
 
 interface ParsedMarkdown {
+  readonly directUrlParents: ReadonlySet<MarkdownNode>;
+  readonly literalRanges: readonly MarkdownRange[];
   readonly nodes: readonly MarkdownNode[];
   readonly parents: ReadonlyMap<MarkdownNode, MarkdownNode | undefined>;
   readonly protectedRanges: readonly MarkdownRange[];
+  readonly referenceDefinitions: ReadonlyMap<number, ReferenceDefinition>;
+}
+
+interface ReferenceDefinition {
+  readonly label: string;
+  readonly range: MarkdownRange;
 }
 
 interface SplitDestination {
@@ -46,9 +55,21 @@ interface SplitDestination {
   readonly subpath: string;
 }
 
+const BINARY_SEARCH_DIVISOR = 2;
+const CHARACTER_REFERENCE_AT_OFFSET = /&(?:#[xX][\dA-Fa-f]+|#\d+|[A-Za-z][A-Za-z\d]+);/uy;
+const ESCAPABLE_PUNCTUATION = /[!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~]/u;
 const CODE_NODE_NAMES = new Set(['CodeBlock', 'FencedCode', 'InlineCode']);
+const FOOTNOTE_LITERAL_NODE_NAMES = new Set([
+  ...CODE_NODE_NAMES,
+  'Comment',
+  'CommentBlock',
+  'HTMLBlock',
+  'HTMLTag',
+  'LinkTitle',
+  'ProcessingInstruction',
+  'URL'
+]);
 const FOOTNOTE_CONTINUATION = /^(?:\t| {2,})/u;
-const FOOTNOTE_MARKER_OVERHEAD = 3;
 const LABEL_SEPARATOR_LENGTH = 2;
 const URI_SCHEME = /^[a-z][a-z\d+.-]*:/iu;
 const REFERENCE_WHITESPACE = /[\t\n\r ]+/gu;
@@ -117,7 +138,7 @@ function collectFootnoteOccurrences(
   protectedRanges: readonly MarkdownRange[],
   labels: Map<string, LabelOccurrences>
 ): void {
-  const definitionLabelRanges: MarkdownRange[] = [];
+  const definitionStarts = new Set<number>();
   let lineStart = 0;
   while (lineStart <= source.length) {
     const newline = source.indexOf('\n', lineStart);
@@ -132,14 +153,13 @@ function collectFootnoteOccurrences(
     ) {
       const marker = match[0];
       const labelFrom = lineStart + marker.indexOf('[^');
-      const labelTo = labelFrom + label.length + FOOTNOTE_MARKER_OVERHEAD;
       const key = normalizeReferenceLabel(`^${label}`);
       const occurrences = getOrCreateOccurrences(labels, key);
       occurrences.definitions.push({
         from: lineStart,
         to: getFootnoteDefinitionEnd(source, lineEnd)
       });
-      definitionLabelRanges.push({ from: labelFrom, to: labelTo });
+      definitionStarts.add(labelFrom);
     }
     if (newline === -1) {
       break;
@@ -157,7 +177,7 @@ function collectFootnoteOccurrences(
       label === undefined
       || isEscaped(source, from)
       || isProtected(from, protectedRanges)
-      || definitionLabelRanges.some((range) => range.from === from)
+      || definitionStarts.has(from)
     ) {
       continue;
     }
@@ -174,31 +194,23 @@ function collectReferenceOccurrences(
   parsed: ParsedMarkdown
 ): Map<string, LabelOccurrences> {
   const labels = new Map<string, LabelOccurrences>();
-  const referenceDefinitionLabels = new Map<string, MarkdownRange[]>();
-
-  for (const node of parsed.nodes) {
-    const parentName = parsed.parents.get(node)?.name;
-    if (node.name !== 'LinkLabel' || parentName !== 'LinkReference') {
+  for (const definition of parsed.referenceDefinitions.values()) {
+    if (isProtected(definition.range.from, parsed.protectedRanges)) {
       continue;
     }
-    const key = normalizeReferenceLabel(source.slice(node.from + 1, node.to - 1));
+    const key = normalizeReferenceLabel(definition.label);
     if (key === '') {
       continue;
     }
-    const ranges = referenceDefinitionLabels.get(key) ?? [];
-    ranges.push(findAncestorRange(node, 'LinkReference', parsed));
-    referenceDefinitionLabels.set(key, ranges);
-  }
-
-  for (const [key, definitions] of referenceDefinitionLabels) {
-    labels.set(key, { definitions, uses: [] });
+    const occurrences = getOrCreateOccurrences(labels, key);
+    occurrences.definitions.push(definition.range);
   }
 
   for (const node of parsed.nodes) {
     if (
       (node.name !== 'Image' && node.name !== 'Link')
       || isProtected(node.from, parsed.protectedRanges)
-      || hasDirectUrlChild(node, parsed)
+      || parsed.directUrlParents.has(node)
       || isWikilinkLike(source, node)
     ) {
       continue;
@@ -240,10 +252,10 @@ function collectRelativeTargets(markdown: string): RelativeMarkdownTarget[] {
     const from = node.from + (isAngleDestination ? 1 : 0);
     const to = node.to - (isAngleDestination ? 1 : 0);
     const destination = markdown.slice(from, to);
-    const split = splitDestination(destination);
-    if (!isRelativeLinkpath(split.linkpath)) {
+    if (!isRelativeDestination(destination)) {
       continue;
     }
+    const split = splitDestination(destination);
 
     targets.push({
       explicitMarkdownExtension: /\.md$/iu.test(split.linkpath),
@@ -256,6 +268,36 @@ function collectRelativeTargets(markdown: string): RelativeMarkdownTarget[] {
   }
 
   return targets;
+}
+
+function decodeMarkdownSyntax(markdown: string): string {
+  let decoded = '';
+  for (let index = 0; index < markdown.length; index += 1) {
+    const character = markdown[index];
+    const nextCharacter = markdown[index + 1];
+    if (character === undefined) {
+      break;
+    }
+    if (
+      character === '\\'
+      && nextCharacter !== undefined
+      && ESCAPABLE_PUNCTUATION.test(nextCharacter)
+    ) {
+      decoded += nextCharacter;
+      index += 1;
+      continue;
+    }
+    const reference = character === '&'
+      ? getCharacterReferenceAt(markdown, index)
+      : null;
+    if (reference !== null) {
+      decoded += decodeMarkdownCharacterReference(reference);
+      index += reference.length - 1;
+      continue;
+    }
+    decoded += character;
+  }
+  return decoded;
 }
 
 function extractReferenceUseLabel(markdown: string): null | string {
@@ -274,21 +316,6 @@ function extractReferenceUseLabel(markdown: string): null | string {
       : secondLabel;
   }
   return reference.slice(1, -1);
-}
-
-function findAncestorRange(
-  node: MarkdownNode,
-  ancestorName: string,
-  parsed: ParsedMarkdown
-): MarkdownRange {
-  let current: MarkdownNode | undefined = node;
-  while (current !== undefined) {
-    if (current.name === ancestorName) {
-      return { from: current.from, to: current.to };
-    }
-    current = findParentNode(current, parsed);
-  }
-  return { from: node.from, to: node.to };
 }
 
 function findParentNode(
@@ -312,6 +339,11 @@ function getBoundarySide(
     return 'outside';
   }
   return 'crossing';
+}
+
+function getCharacterReferenceAt(markdown: string, offset: number): null | string {
+  CHARACTER_REFERENCE_AT_OFFSET.lastIndex = offset;
+  return CHARACTER_REFERENCE_AT_OFFSET.exec(markdown)?.[0] ?? null;
 }
 
 function getFootnoteDefinitionEnd(source: string, openingLineEnd: number): number {
@@ -370,7 +402,7 @@ function hasCrossBoundaryReference(
 ): boolean {
   const parsed = parseMarkdown(source);
   const labels = collectReferenceOccurrences(source, parsed);
-  collectFootnoteOccurrences(source, parsed.protectedRanges, labels);
+  collectFootnoteOccurrences(source, parsed.literalRanges, labels);
 
   for (const occurrences of labels.values()) {
     if (occurrences.definitions.length === 0) {
@@ -387,10 +419,6 @@ function hasCrossBoundaryReference(
   return false;
 }
 
-function hasDirectUrlChild(node: MarkdownNode, parsed: ParsedMarkdown): boolean {
-  return parsed.nodes.some((candidate) => candidate.name === 'URL' && findParentNode(candidate, parsed) === node);
-}
-
 function isEscaped(source: string, offset: number): boolean {
   let backslashes = 0;
   for (let index = offset - 1; index >= 0 && source[index] === '\\'; index -= 1) {
@@ -403,15 +431,34 @@ function isProtected(
   offset: number,
   protectedRanges: readonly MarkdownRange[]
 ): boolean {
-  return protectedRanges.some((range) => range.from <= offset && offset < range.to);
+  let lowerIndex = 0;
+  let upperIndex = protectedRanges.length - 1;
+  while (lowerIndex <= upperIndex) {
+    const middleIndex = Math.floor(
+      (lowerIndex + upperIndex) / BINARY_SEARCH_DIVISOR
+    );
+    const range = protectedRanges[middleIndex];
+    if (range === undefined) {
+      return false;
+    }
+    if (offset < range.from) {
+      upperIndex = middleIndex - 1;
+    } else if (offset >= range.to) {
+      lowerIndex = middleIndex + 1;
+    } else {
+      return true;
+    }
+  }
+  return false;
 }
 
-function isRelativeLinkpath(linkpath: string): boolean {
-  return linkpath !== ''
-    && !linkpath.startsWith('/')
-    && !linkpath.startsWith('#')
-    && !linkpath.startsWith('^')
-    && !URI_SCHEME.test(linkpath);
+function isRelativeDestination(destination: string): boolean {
+  const decodedDestination = decodeMarkdownSyntax(destination);
+  return decodedDestination !== ''
+    && !decodedDestination.startsWith('/')
+    && !decodedDestination.startsWith('#')
+    && !decodedDestination.startsWith('^')
+    && !URI_SCHEME.test(decodedDestination);
 }
 
 function isWikilinkLike(source: string, node: MarkdownNode): boolean {
@@ -419,13 +466,10 @@ function isWikilinkLike(source: string, node: MarkdownNode): boolean {
 }
 
 function normalizeReferenceLabel(label: string): string {
-  return label
-    .replaceAll(
-      /\\(?<escapedPunctuation>[!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])/gu,
-      '$<escapedPunctuation>'
-    )
+  return decodeMarkdownSyntax(label)
     .replaceAll(REFERENCE_WHITESPACE, ' ')
     .trim()
+    .toUpperCase()
     .toLowerCase();
 }
 
@@ -434,15 +478,31 @@ function parseMarkdown(markdown: string): ParsedMarkdown {
   const parents = new Map<MarkdownNode, MarkdownNode | undefined>();
   const nodeStack: MarkdownNode[] = [];
   const codeRanges: MarkdownRange[] = [];
+  const literalRanges: MarkdownRange[] = [];
+  const directUrlParents = new Set<MarkdownNode>();
+  const referenceDefinitions = new Map<number, ReferenceDefinition>();
 
   parser.parse(markdown).iterate({
     enter(node) {
       const parsedNode = { from: node.from, name: node.name, to: node.to };
+      const parent = nodeStack.at(-1);
       nodes.push(parsedNode);
-      parents.set(parsedNode, nodeStack.at(-1));
+      parents.set(parsedNode, parent);
       nodeStack.push(parsedNode);
+      if (node.name === 'URL' && parent !== undefined) {
+        directUrlParents.add(parent);
+      }
+      if (node.name === 'LinkLabel' && parent?.name === 'LinkReference') {
+        referenceDefinitions.set(parent.from, {
+          label: markdown.slice(node.from + 1, node.to - 1),
+          range: { from: parent.from, to: parent.to }
+        });
+      }
       if (CODE_NODE_NAMES.has(node.name)) {
         codeRanges.push({ from: node.from, to: node.to });
+      }
+      if (FOOTNOTE_LITERAL_NODE_NAMES.has(node.name)) {
+        literalRanges.push({ from: node.from, to: node.to });
       }
     },
     leave() {
@@ -450,14 +510,40 @@ function parseMarkdown(markdown: string): ParsedMarkdown {
     }
   });
 
+  const protectedRanges = sortAndMergeRanges([
+    ...parseMarkdownStructure(markdown).protectedRanges,
+    ...codeRanges
+  ]);
   return {
+    directUrlParents,
+    literalRanges: sortAndMergeRanges([
+      ...protectedRanges,
+      ...literalRanges
+    ]),
     nodes,
     parents,
-    protectedRanges: [
-      ...parseMarkdownStructure(markdown).protectedRanges,
-      ...codeRanges
-    ]
+    protectedRanges,
+    referenceDefinitions
   };
+}
+
+function sortAndMergeRanges(
+  ranges: readonly MarkdownRange[]
+): readonly MarkdownRange[] {
+  const sortedRanges = [...ranges].sort((left, right) => left.from - right.from || left.to - right.to);
+  const mergedRanges: MarkdownRange[] = [];
+  for (const range of sortedRanges) {
+    const previous = mergedRanges.at(-1);
+    if (previous === undefined || range.from > previous.to) {
+      mergedRanges.push(range);
+    } else if (range.to > previous.to) {
+      mergedRanges[mergedRanges.length - 1] = {
+        from: previous.from,
+        to: range.to
+      };
+    }
+  }
+  return mergedRanges;
 }
 
 function splitDestination(destination: string): SplitDestination {
@@ -466,6 +552,14 @@ function splitDestination(destination: string): SplitDestination {
     const character = destination[index];
     if (character === '\\') {
       backslashes += 1;
+      continue;
+    }
+    const characterReference = character === '&'
+      ? getCharacterReferenceAt(destination, index)
+      : null;
+    if (characterReference !== null) {
+      index += characterReference.length - 1;
+      backslashes = 0;
       continue;
     }
     if (character === '#' && backslashes % LABEL_SEPARATOR_LENGTH === 0) {
