@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from 'vitest';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionRange, DeletionTarget } from './deletion-planner.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible executor imports compact.
-import type { ExtractionNoticeDetails, ExtractionRuntime } from './section-extraction-executor.ts';
+import type { ExtractionExecution, ExtractionNoticeDetails, ExtractionRuntime } from './section-extraction-executor.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
 import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
 
@@ -40,6 +40,7 @@ interface TestExtractionDependencies {
   execute(
     editor: SectionEditor,
     sourcePath: string,
+    execution: ExtractionExecution<PublicTFile>,
     runtime: ExtractionRuntime<PublicTFile>,
     notify: (details: ExtractionNoticeDetails) => void
   ): Promise<boolean>;
@@ -845,6 +846,7 @@ describe('SectionalsPlugin', () => {
       (
         _editor: SectionEditor,
         _sourcePath: string,
+        _execution: ExtractionExecution<PublicTFile>,
         _runtime: ExtractionRuntime<PublicTFile>,
         _notify: (details: ExtractionNoticeDetails) => void
       ) =>
@@ -877,6 +879,7 @@ describe('SectionalsPlugin', () => {
     expect(execute).toHaveBeenCalledOnce();
     expect(execute.mock.calls[0]?.[0]).not.toBe(fixture.editor);
     expect(execute.mock.calls[0]?.[1]).toBe('Notes/source.md');
+    expect(execute.mock.calls[0]?.[2]).toEqual({ mode: 'linked' });
     expect(observeExecution).toHaveBeenCalledOnce();
     expect(completion).toBeInstanceOf(Promise);
     expect(notify).not.toHaveBeenCalled();
@@ -931,8 +934,10 @@ describe('SectionalsPlugin', () => {
       async (
         _editor: SectionEditor,
         _sourcePath: string,
+        execution: ExtractionExecution<PublicTFile>,
         runtime: ExtractionRuntime<PublicTFile>
       ) => {
+        expect(execution).toEqual({ mode: 'linked' });
         expect(
           runtime.getNewFileParent('Folder//source.md', 'Extract me.md')
         ).toBe(destinationFolder);
@@ -1379,6 +1384,10 @@ describe('SectionalsPlugin', () => {
         'The source changed unexpectedly; the extracted note was kept: Extracted/Topic.md'
       ],
       [
+        { kind: 'open-failed', path: 'Extracted/Topic.md' },
+        'The section was extracted, but the new note could not be opened: Extracted/Topic.md'
+      ],
+      [
         { kind: 'rollback-failed', path: 'Extracted/Topic.md' },
         'Extraction stopped, but the new note could not be removed: Extracted/Topic.md'
       ],
@@ -1408,6 +1417,7 @@ describe('SectionalsPlugin', () => {
         (
           _editor: SectionEditor,
           _sourcePath: string,
+          _execution: ExtractionExecution<PublicTFile>,
           _runtime: ExtractionRuntime<PublicTFile>,
           report: (notice: ExtractionNoticeDetails) => void
         ) => {
@@ -1451,6 +1461,9 @@ describe('SectionalsPlugin', () => {
     }).toThrow(TypeError);
     expect(() => {
       formatExtractionNotice({ kind: 'indeterminate-source-mutation' });
+    }).toThrow(TypeError);
+    expect(() => {
+      formatExtractionNotice({ kind: 'open-failed' });
     }).toThrow(TypeError);
     expect(() => {
       formatExtractionNotice({ kind: 'rollback-failed' });
@@ -1500,6 +1513,7 @@ describe('SectionalsPlugin', () => {
           (
             _editor: SectionEditor,
             _sourcePath: string,
+            _execution: ExtractionExecution<PublicTFile>,
             _runtime: ExtractionRuntime<PublicTFile>,
             report: (notice: ExtractionNoticeDetails) => void
           ) => {

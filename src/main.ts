@@ -9,8 +9,12 @@ import { normalizePath, Notice, Plugin, TFile, TFolder } from 'obsidian';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionMode, DeletionRange, DeletionTarget } from './deletion-planner.ts';
 import type { MarkdownBlockKind } from './markdown-structure.ts';
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible executor imports compact.
-import type { ExtractionEditor, ExtractionNoticeDetails, ExtractionRuntime } from './section-extraction-executor.ts';
+import type {
+  ExtractionEditor,
+  ExtractionExecution,
+  ExtractionNoticeDetails,
+  ExtractionRuntime
+} from './section-extraction-executor.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
 import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
 
@@ -32,6 +36,7 @@ export const EXTRACTION_NOTICES = {
   'cross-boundary-reference': 'The section has a reference or footnote outside its boundaries.',
   'destination-changed': 'Extraction stopped because the new note changed: {path}',
   'indeterminate-source-mutation': 'The source changed unexpectedly; the extracted note was kept: {path}',
+  'open-failed': 'The section was extracted, but the new note could not be opened: {path}',
   'rollback-failed': 'Extraction stopped, but the new note could not be removed: {path}',
   'source-changed': 'The source note changed; extraction was cancelled.',
   'source-edit-failed': 'Unable to replace the source section.',
@@ -83,6 +88,7 @@ export interface ExtractionCommandDependencies {
   execute(
     editor: ExtractionEditor,
     sourcePath: string,
+    execution: ExtractionExecution<TFile>,
     runtime: ExtractionRuntime<TFile>,
     notify: (details: ExtractionNoticeDetails) => void
   ): Promise<boolean>;
@@ -273,6 +279,7 @@ export default class SectionalsPlugin extends Plugin {
               editor
             ),
             expectedSourcePath,
+            { mode: 'linked' },
             createExtractionRuntime(this.app),
             this.extractionDependencies
           );
@@ -419,6 +426,7 @@ function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
 async function runExtractionCommand(
   editor: ExtractionEditor,
   sourcePath: string,
+  execution: ExtractionExecution<TFile>,
   runtime: ExtractionRuntime<TFile>,
   dependencies: ExtractionCommandDependencies
 ): Promise<void> {
@@ -427,6 +435,7 @@ async function runExtractionCommand(
     await dependencies.execute(
       editor,
       sourcePath,
+      execution,
       runtime,
       (details) => {
         const message = formatExtractionNotice(details);
