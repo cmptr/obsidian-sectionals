@@ -1402,6 +1402,84 @@ describe('SectionalsPlugin', () => {
     );
   });
 
+  it.each(['linked', 'open'] as const)(
+    'retains a same-path replacement inserted while the first %s destination read settles',
+    async (mode) => {
+      const harness = createIdentityHarness('present', mode);
+      const originalCreate = harness.app.vault.create.bind(harness.app.vault);
+      const originalDelete = harness.app.vault.delete.bind(harness.app.vault);
+      const originalRead = harness.app.vault.read.bind(harness.app.vault);
+      const productionDelete = vi.spyOn(harness.app.vault, 'delete');
+      const readEvents: string[] = [];
+      let destinationReadCount = 0;
+      let originalDestination: TFile | undefined;
+      let replacement: SourceIdentityFile | undefined;
+      vi.spyOn(harness.app.vault, 'read').mockImplementation((file) => {
+        const originalReadPromise = originalRead(file);
+        if (
+          file.path !== IDENTITY_DESTINATION_PATH
+          || destinationReadCount !== 0
+        ) {
+          return originalReadPromise;
+        }
+        destinationReadCount += 1;
+        originalDestination = file;
+        readEvents.push('underlying-read-invoked');
+        const replacementPromise = originalReadPromise.then(
+          async (originalContent) => {
+            readEvents.push('original-bytes-captured');
+            await originalDelete(file);
+            const recreated = await originalCreate(
+              IDENTITY_DESTINATION_PATH,
+              'replacement bytes\n'
+            );
+            if (
+              !(recreated instanceof PublicTFile)
+              || !(recreated instanceof TFile)
+            ) {
+              throw new TypeError('Expected a replacement destination file.');
+            }
+            replacement = recreated;
+            readEvents.push('replacement-inserted');
+            return originalContent;
+          }
+        );
+        return replacementPromise.then((originalContent) => {
+          readEvents.push('read-settled');
+          return originalContent;
+        });
+      });
+
+      await invokeIdentityExtraction(harness);
+
+      expect(readEvents).toEqual([
+        'underlying-read-invoked',
+        'original-bytes-captured',
+        'replacement-inserted',
+        'read-settled'
+      ]);
+      expect(replacement).toBeInstanceOf(PublicTFile);
+      expect(originalDestination).toBeInstanceOf(PublicTFile);
+      expect(replacement).not.toBe(originalDestination);
+      expect(
+        harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
+      ).toBe(replacement);
+      if (replacement === undefined) {
+        throw new TypeError('Expected the retained replacement destination.');
+      }
+      expect(await originalRead(replacement)).toBe('replacement bytes\n');
+      expect(await originalRead(harness.sourceFile)).toBe(IDENTITY_SOURCE);
+      expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
+      expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+      expect(harness.fixture.setCursor).not.toHaveBeenCalled();
+      expect(harness.openFile).not.toHaveBeenCalled();
+      expect(productionDelete).not.toHaveBeenCalled();
+      expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
+        `Extraction stopped, but the new note could not be removed: ${IDENTITY_DESTINATION_PATH}`
+      );
+    }
+  );
+
   it('retains a different same-path destination inserted before rollback read', async () => {
     const harness = createIdentityHarness();
     const originalCreate = harness.app.vault.create.bind(harness.app.vault);
@@ -1815,9 +1893,16 @@ describe('SectionalsPlugin', () => {
         expect(harness.openFile).toHaveBeenCalledOnce();
       }
       expect(harness.notify).not.toHaveBeenCalled();
-      expect(
-        harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
-      ).toBeInstanceOf(PublicTFile);
+      const destination = harness.app.vault.getAbstractFileByPath(
+        IDENTITY_DESTINATION_PATH
+      );
+      expect(destination).toBeInstanceOf(PublicTFile);
+      if (!(destination instanceof TFile)) {
+        throw new TypeError('Expected the stable extraction destination.');
+      }
+      expect(await harness.app.vault.read(destination)).toBe(
+        '# Extract me\n\nbody\n'
+      );
     }
   );
 

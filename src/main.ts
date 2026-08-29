@@ -492,9 +492,11 @@ function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
       }
       return parent;
     },
-    read(file): Promise<string> {
+    async read(file): Promise<string> {
       assertCurrentExtractionFile(app, file);
-      return app.vault.read(file);
+      const content = await app.vault.read(file);
+      assertCurrentExtractionFile(app, file);
+      return content;
     },
     resolveLink(linkpath, sourcePath): null | TFile {
       const file = app.metadataCache.getFirstLinkpathDest(
