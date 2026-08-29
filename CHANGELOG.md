@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a command to extract the current section into a linked note.
 - Add commands to move the current section within its sibling group and repeat the last movement.
 
 ## 0.1.2
