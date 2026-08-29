@@ -1,13 +1,22 @@
 /* eslint-disable perfectionist/sort-modules -- Keep tests grouped by production behavior and established command order. */
 
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
-import type { App, Command, Editor, EditorPosition, MarkdownView, PluginManifest } from 'obsidian';
+import type {
+  App,
+  Command,
+  Editor,
+  EditorPosition,
+  MarkdownFileInfo,
+  MarkdownView as PublicMarkdownView,
+  // eslint-disable-next-line perfectionist/sort-named-imports -- Dprint sorts imported names before local aliases.
+  PluginManifest,
+  WorkspaceLeaf as PublicWorkspaceLeaf
+} from 'obsidian';
 import type { MockInstance } from 'vitest';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
 import { TFile as PublicTFile, TFolder as PublicTFolder } from 'obsidian';
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian test imports compact.
-import { App as ObsidianApp, TFile, TFolder } from 'obsidian-test-mocks/obsidian';
+// eslint-disable-next-line @stylistic/object-curly-newline, perfectionist/sort-named-imports -- Keep dprint-compatible canonical test imports.
+import { App as ObsidianApp, MarkdownView, TFile, TFolder, WorkspaceLeaf } from 'obsidian-test-mocks/obsidian';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it, vi } from 'vitest';
 
@@ -95,15 +104,39 @@ function asApp(value: unknown): App {
   return value as App;
 }
 
-function asMarkdownView(value: unknown): MarkdownView {
-  return value as MarkdownView;
+function asMarkdownFileInfo(value: unknown): MarkdownFileInfo {
+  return value as MarkdownFileInfo;
+}
+
+function asMarkdownView(value: unknown): PublicMarkdownView {
+  return value as PublicMarkdownView;
 }
 
 function createMarkdownView(
   file: PublicTFile,
   editor: SectionEditor
-): MarkdownView {
+): PublicMarkdownView {
   return asMarkdownView({ editor, file });
+}
+
+interface MarkdownOriginFixture {
+  readonly leaf: PublicWorkspaceLeaf;
+  readonly view: PublicMarkdownView;
+}
+
+function createMarkdownOrigin(
+  app: ReturnType<typeof ObsidianApp.createConfigured__>,
+  file: PublicTFile,
+  editor: SectionEditor
+): MarkdownOriginFixture {
+  const mockLeaf = WorkspaceLeaf.create2__(app);
+  const mockView = MarkdownView.create2__(mockLeaf);
+  const leaf = mockLeaf.asOriginalType3__();
+  const view = mockView.asOriginalType7__();
+  view.file = file;
+  view.editor = editor as Editor;
+  leaf.view = view;
+  return { leaf, view };
 }
 
 function loadPluginCommands(
@@ -146,9 +179,11 @@ const IDENTITY_SOURCE_PATH = 'Folder/source.md';
 type MockObsidianApp = ReturnType<typeof ObsidianApp.createConfigured__>;
 type SourceIdentityFile = PublicTFile & TFile;
 
+type ExtractionCommandMode = 'linked' | 'open';
+
 interface MutableIdentityView {
   editor: Editor | undefined;
-  file: SourceIdentityFile;
+  file: null | PublicTFile;
 }
 
 interface IdentityHarness {
@@ -157,7 +192,10 @@ interface IdentityHarness {
   readonly commands: ReadonlyMap<string, Command>;
   readonly fixture: EditorFixture;
   getCompletion(): Promise<void> | undefined;
+  readonly mode: ExtractionCommandMode;
   readonly notify: ReturnType<typeof vi.fn>;
+  readonly openFile: ReturnType<typeof vi.fn>;
+  readonly originatingLeaf: null | PublicWorkspaceLeaf;
   readonly otherFile: SourceIdentityFile;
   readonly sourceFile: SourceIdentityFile;
   readonly view: MutableIdentityView;
@@ -170,7 +208,8 @@ type SourceIdentityMutation = (
 ) => Promise<void> | void;
 
 function createIdentityHarness(
-  contextEditorState: 'present' | 'undefined' = 'present'
+  contextEditorState: 'present' | 'undefined' = 'present',
+  mode: ExtractionCommandMode = 'linked'
 ): IdentityHarness {
   const app = ObsidianApp.createConfigured__({
     files: {
@@ -197,12 +236,25 @@ function createIdentityHarness(
     IDENTITY_SOURCE,
     IDENTITY_SOURCE.indexOf('body')
   );
-  const view = {
-    editor: contextEditorState === 'present'
-      ? fixture.editor as Editor
-      : undefined,
-    file: sourceFile
-  };
+  let originatingLeaf: null | PublicWorkspaceLeaf = null;
+  let openFile = vi.fn();
+  let view: MutableIdentityView;
+  if (mode === 'open') {
+    const origin = createMarkdownOrigin(app, sourceFile, fixture.editor);
+    originatingLeaf = origin.leaf;
+    openFile = vi.spyOn(origin.leaf, 'openFile');
+    view = origin.view;
+    if (contextEditorState === 'undefined') {
+      view.editor = undefined;
+    }
+  } else {
+    view = {
+      editor: contextEditorState === 'present'
+        ? fixture.editor as Editor
+        : undefined,
+      file: sourceFile
+    };
+  }
   const notify = vi.fn();
   let completion: Promise<void> | undefined;
   const commands = getRegisteredCommands(
@@ -223,7 +275,10 @@ function createIdentityHarness(
     getCompletion(): Promise<void> | undefined {
       return completion;
     },
+    mode,
     notify,
+    openFile,
+    originatingLeaf,
     otherFile,
     sourceFile,
     view
@@ -233,9 +288,10 @@ function createIdentityHarness(
 async function invokeIdentityExtraction(
   harness: IdentityHarness
 ): Promise<void> {
-  const result = harness.commands.get(
-    'extract-current-section-to-linked-note'
-  )?.editorCheckCallback?.(
+  const commandId = harness.mode === 'open'
+    ? 'extract-current-section-to-new-note'
+    : 'extract-current-section-to-linked-note';
+  const result = harness.commands.get(commandId)?.editorCheckCallback?.(
     false,
     harness.fixture.editor as Editor,
     asMarkdownView(harness.view)
@@ -251,9 +307,10 @@ async function invokeIdentityExtraction(
 async function runPostCreateIdentityMutation(
   mutate: SourceIdentityMutation,
   beforeExtraction?: (harness: IdentityHarness) => void,
-  contextEditorState: 'present' | 'undefined' = 'present'
+  contextEditorState: 'present' | 'undefined' = 'present',
+  mode: ExtractionCommandMode = 'linked'
 ): Promise<IdentityHarness> {
-  const harness = createIdentityHarness(contextEditorState);
+  const harness = createIdentityHarness(contextEditorState, mode);
   const originalCreate = harness.app.vault.create.bind(harness.app.vault);
   let didMutate = false;
   vi.spyOn(harness.app.vault, 'create').mockImplementation(
@@ -283,6 +340,7 @@ async function runPostCreateIdentityMutation(
   ).toBeNull();
   expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
   expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
+  expect(harness.openFile).not.toHaveBeenCalled();
   expect(harness.notify).toHaveBeenCalledOnce();
   expect(harness.notify).toHaveBeenCalledWith(
     'The source note changed; extraction was cancelled.'
@@ -291,9 +349,10 @@ async function runPostCreateIdentityMutation(
 }
 
 async function runFinalGuardIdentityMutation(
-  configureMutation: (harness: IdentityHarness) => void
+  configureMutation: (harness: IdentityHarness) => void,
+  mode: ExtractionCommandMode = 'linked'
 ): Promise<void> {
-  const harness = createIdentityHarness();
+  const harness = createIdentityHarness('present', mode);
   configureMutation(harness);
   const deleteFile = vi.spyOn(harness.app.vault, 'delete');
 
@@ -311,6 +370,7 @@ async function runFinalGuardIdentityMutation(
   ).toBeNull();
   expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
   expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
+  expect(harness.openFile).not.toHaveBeenCalled();
   expect(harness.notify).toHaveBeenCalledOnce();
   expect(harness.notify).toHaveBeenCalledWith(
     'The source note changed; extraction was cancelled.'
@@ -650,7 +710,7 @@ describe('SectionalsPlugin', () => {
   it('registers exact editor-only command metadata without hotkeys', () => {
     const { addCommand } = loadPluginCommands();
 
-    expect(addCommand).toHaveBeenCalledTimes(12);
+    expect(addCommand).toHaveBeenCalledTimes(13);
     expect(
       addCommand.mock.calls.map(([command]) => ({
         callback: command.callback,
@@ -756,81 +816,173 @@ describe('SectionalsPlugin', () => {
         hotkeys: undefined,
         id: 'extract-current-section-to-linked-note',
         name: 'Extract current section to linked note'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'extract-current-section-to-new-note',
+        name: 'Extract current section to new note'
       }
     ]);
   });
 
-  it('checks extraction availability from the current editor and source file without side effects', () => {
-    const getNewFileParent = vi.fn();
-    const getFirstLinkpathDestination = vi.fn();
-    const fileToLinktext = vi.fn();
-    const create = vi.fn();
-    const read = vi.fn();
-    const deleteFile = vi.fn();
-    const getAbstractFileByPath = vi.fn();
-    const app = asApp({
-      fileManager: { getNewFileParent },
-      metadataCache: {
-        fileToLinktext,
-        // eslint-disable-next-line unicorn/name-replacements -- Obsidian public API name.
-        getFirstLinkpathDest: getFirstLinkpathDestination
-      },
-      vault: {
-        create,
-        delete: deleteFile,
-        getAbstractFileByPath,
-        read
-      }
+  // eslint-disable-next-line complexity -- Keep the complete side-effect-free availability matrix in one stateful test.
+  it('checks linked and open extraction availability without side effects or repeat mutation', () => {
+    const readySource = '# Extract me\nbody\n';
+    const app = ObsidianApp.createConfigured__({
+      files: { 'Notes/source.md': readySource }
     });
+    const sourceFile = app.vault.getAbstractFileByPath('Notes/source.md');
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected the availability source file.');
+    }
+    const ready = createEditor(readySource, readySource.indexOf('body'));
+    const alternate = createEditor(readySource, readySource.indexOf('body'));
+    const unavailable = createEditor('plain text\n', 2);
+    const origin = createMarkdownOrigin(app, sourceFile, ready.editor);
+    const openFile = vi.spyOn(origin.leaf, 'openFile');
+    const getNewFileParent = vi.spyOn(app.fileManager, 'getNewFileParent');
+    const getFirstLinkpathDestination = vi.spyOn(
+      app.metadataCache,
+      'getFirstLinkpathDest'
+    );
+    const fileToLinktext = vi.spyOn(app.metadataCache, 'fileToLinktext');
+    const create = vi.spyOn(app.vault, 'create');
+    const read = vi.spyOn(app.vault, 'read');
+    const deleteFile = vi.spyOn(app.vault, 'delete');
+    const getAbstractFileByPath = vi.spyOn(
+      app.vault,
+      'getAbstractFileByPath'
+    );
     const execute = vi.fn(() => Promise.resolve(true));
     const notify = vi.fn();
     const observeExecution = vi.fn();
     const commands = getRegisteredCommands(
-      loadPluginCommands(app, { execute, notify, observeExecution })
+      loadPluginCommands(asApp(app), { execute, notify, observeExecution })
     );
-    const extraction = commands.get(
+    const linkedExtraction = commands.get(
       'extract-current-section-to-linked-note'
     );
-    const unavailable = createEditor('plain text\n', 2);
-    const readySource = '# Extract me\nbody\n';
-    const ready = createEditor(readySource, readySource.indexOf('body'));
-    const invalidSource = '# Extract me\nbody[^outside]\n# Keep\n[^outside]: note\n';
-    const invalid = createEditor(
-      invalidSource,
-      invalidSource.indexOf('body')
+    const openExtraction = commands.get(
+      'extract-current-section-to-new-note'
     );
+    const linkedContext = asMarkdownFileInfo({ file: sourceFile });
 
     expect(
-      extraction?.editorCheckCallback?.(
+      linkedExtraction?.editorCheckCallback?.(
         true,
         ready.editor as Editor,
-        { file: null } as MarkdownView
+        { file: null } as PublicMarkdownView
       )
     ).toBe(false);
     expect(
-      extraction?.editorCheckCallback?.(
+      linkedExtraction?.editorCheckCallback?.(
         true,
         unavailable.editor as Editor,
-        { file: { path: 'Notes/source.md' } } as MarkdownView
+        linkedContext
       )
     ).toBe(false);
     expect(
-      extraction?.editorCheckCallback?.(
+      linkedExtraction?.editorCheckCallback?.(
         true,
         ready.editor as Editor,
-        { file: { path: 'Notes/source.md' } } as MarkdownView
+        linkedContext
       )
     ).toBe(true);
+
     expect(
-      extraction?.editorCheckCallback?.(
+      openExtraction?.editorCheckCallback?.(
         true,
-        invalid.editor as Editor,
-        { file: { path: 'Notes/source.md' } } as MarkdownView
+        ready.editor as Editor,
+        { file: null } as PublicMarkdownView
+      )
+    ).toBe(false);
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        asMarkdownView({ editor: ready.editor, file: sourceFile })
+      )
+    ).toBe(false);
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        asMarkdownView({
+          editor: ready.editor,
+          file: sourceFile,
+          leaf: origin.leaf
+        })
+      )
+    ).toBe(false);
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        origin.view
       )
     ).toBe(true);
+
+    origin.view.editor = alternate.editor as Editor;
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        origin.view
+      )
+    ).toBe(false);
+    origin.view.editor = ready.editor as Editor;
+    vi.mocked(ready.editor.getValue).mockImplementationOnce(() => {
+      throw new Error('editor unavailable');
+    });
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        origin.view
+      )
+    ).toBe(false);
+    const unrelatedOrigin = createMarkdownOrigin(
+      app,
+      sourceFile,
+      alternate.editor
+    );
+    origin.leaf.view = unrelatedOrigin.view;
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        origin.view
+      )
+    ).toBe(false);
+    origin.leaf.view = origin.view;
+    Object.defineProperty(origin.leaf, 'view', {
+      configurable: true,
+      get() {
+        throw new Error('leaf unavailable');
+      }
+    });
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        origin.view
+      )
+    ).toBe(false);
+
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        true,
+        ready.editor as Editor,
+        origin.view
+      )
+    ).toBe(false);
     expect(execute).not.toHaveBeenCalled();
     expect(observeExecution).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
+    expect(openFile).not.toHaveBeenCalled();
     expect(getNewFileParent).not.toHaveBeenCalled();
     expect(getFirstLinkpathDestination).not.toHaveBeenCalled();
     expect(fileToLinktext).not.toHaveBeenCalled();
@@ -887,6 +1039,190 @@ describe('SectionalsPlugin', () => {
     finishExecution?.(true);
     await completion;
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('captures the originating leaf without consulting later workspace selection', async () => {
+    const source = '# Extract me\nbody\n';
+    const app = ObsidianApp.createConfigured__({
+      files: {
+        'Folder/created.md': '# Extract me\n\nbody\n',
+        'Folder/source.md': source
+      }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    const createdFile = app.vault.getAbstractFileByPath('Folder/created.md');
+    if (
+      !(sourceFile instanceof PublicTFile)
+      || !(sourceFile instanceof TFile)
+      || !(createdFile instanceof PublicTFile)
+      || !(createdFile instanceof TFile)
+    ) {
+      throw new TypeError('Expected open-command files.');
+    }
+    const fixture = createEditor(source, source.indexOf('body'));
+    const origin = createMarkdownOrigin(app, sourceFile, fixture.editor);
+    const unrelatedMockLeaf = WorkspaceLeaf.create2__(app);
+    const unrelatedLeaf = unrelatedMockLeaf.asOriginalType3__();
+    const originatingOpen = vi.spyOn(origin.leaf, 'openFile');
+    const unrelatedOpen = vi.spyOn(unrelatedLeaf, 'openFile');
+    const getActiveViewOfType = vi.spyOn(app.workspace, 'getActiveViewOfType');
+    const getLeaf = vi.spyOn(app.workspace, 'getLeaf');
+    const getMostRecentLeaf = vi.spyOn(app.workspace, 'getMostRecentLeaf');
+    const revealLeaf = vi.spyOn(app.workspace, 'revealLeaf');
+    const setActiveLeaf = vi.spyOn(app.workspace, 'setActiveLeaf');
+    let capturedExecution: ExtractionExecution<PublicTFile> | undefined;
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands(asApp(app), {
+        execute: vi.fn(
+          (
+            _editor: SectionEditor,
+            _sourcePath: string,
+            execution: ExtractionExecution<PublicTFile>,
+            _runtime: ExtractionRuntime<PublicTFile>,
+            _notify: (details: ExtractionNoticeDetails) => void
+          ) => {
+            capturedExecution = execution;
+            return Promise.resolve(true);
+          }
+        ),
+        notify: vi.fn(),
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+
+    expect(
+      commands.get('extract-current-section-to-new-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          origin.view
+        )
+    ).toBe(true);
+    await completion;
+    expect(capturedExecution?.mode).toBe('open');
+    if (capturedExecution?.mode !== 'open') {
+      throw new TypeError('Expected a captured open execution.');
+    }
+
+    app.workspace.activeLeaf = unrelatedMockLeaf;
+    await capturedExecution.openCreatedFile(createdFile);
+
+    expect(originatingOpen).toHaveBeenCalledExactlyOnceWith(createdFile);
+    expect(unrelatedOpen).not.toHaveBeenCalled();
+    expect(getActiveViewOfType).not.toHaveBeenCalled();
+    expect(getLeaf).not.toHaveBeenCalled();
+    expect(getMostRecentLeaf).not.toHaveBeenCalled();
+    expect(revealLeaf).not.toHaveBeenCalled();
+    expect(setActiveLeaf).not.toHaveBeenCalled();
+  });
+
+  it('commits open extraction before opening and retains both files when opening fails', async () => {
+    const source = '# Extract me\nbody\n';
+    const app = ObsidianApp.createConfigured__({
+      files: { 'Folder/source.md': source }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected the open integration source file.');
+    }
+    const fixture = createEditor(source, source.indexOf('body'));
+    const origin = createMarkdownOrigin(app, sourceFile, fixture.editor);
+    const openFile = vi.spyOn(origin.leaf, 'openFile').mockImplementation(
+      async (createdFile) => {
+        expect(fixture.editor.getValue()).toBe('');
+        if (!(createdFile instanceof TFile)) {
+          throw new TypeError('Expected the concrete created file.');
+        }
+        expect(await app.vault.read(createdFile)).toBe(
+          '# Extract me\n\nbody\n'
+        );
+        throw new Error('open failed');
+      }
+    );
+    const notify = vi.fn();
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands(asApp(app), {
+        execute: executeSectionExtraction,
+        notify,
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+
+    expect(
+      commands.get('extract-current-section-to-new-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          origin.view
+        )
+    ).toBe(true);
+    await completion;
+
+    expect(openFile).toHaveBeenCalledOnce();
+    expect(fixture.editor.getValue()).toBe('');
+    const destination = app.vault.getAbstractFileByPath(
+      'Folder/Extract me.md'
+    );
+    expect(destination).toBeInstanceOf(PublicTFile);
+    if (!(destination instanceof TFile)) {
+      throw new TypeError('Expected the retained open destination.');
+    }
+    expect(await app.vault.read(destination)).toBe('# Extract me\n\nbody\n');
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      'The section was extracted, but the new note could not be opened: Folder/Extract me.md'
+    );
+  });
+
+  it('keeps linked extraction in place without opening a leaf', async () => {
+    const source = '# Extract me\nbody\n';
+    const app = ObsidianApp.createConfigured__({
+      files: { 'Folder/source.md': source }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected the linked integration source file.');
+    }
+    const fixture = createEditor(source, source.indexOf('body'));
+    const origin = createMarkdownOrigin(app, sourceFile, fixture.editor);
+    const openFile = vi.spyOn(origin.leaf, 'openFile');
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands(asApp(app), {
+        execute: executeSectionExtraction,
+        notify: vi.fn(),
+        observeExecution(execution) {
+          completion = execution;
+        }
+      })
+    );
+
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          asMarkdownFileInfo({ file: sourceFile })
+        )
+    ).toBe(true);
+    await completion;
+
+    expect(fixture.editor.getValue()).toBe('[[Extract me]]\n');
+    expect(fixture.setCursor).toHaveBeenCalledOnce();
+    expect(openFile).not.toHaveBeenCalled();
+    const destination = app.vault.getAbstractFileByPath(
+      'Folder/Extract me.md'
+    );
+    expect(destination).toBeInstanceOf(PublicTFile);
+    if (!(destination instanceof TFile)) {
+      throw new TypeError('Expected the retained linked destination.');
+    }
+    expect(await app.vault.read(destination)).toBe('# Extract me\n\nbody\n');
   });
 
   it('adapts extraction to normalized public Obsidian file APIs and concrete file types', async () => {
@@ -1143,45 +1479,83 @@ describe('SectionalsPlugin', () => {
     );
   });
 
-  it('cancels and rolls back when the source file is renamed during extraction', async () => {
-    await runPostCreateIdentityMutation(async (harness) => {
-      await harness.app.vault.rename(
-        harness.sourceFile,
-        'Folder/renamed.md'
+  it.each(['linked', 'open'] as const)(
+    'cancels and rolls back when the source file is renamed during %s extraction',
+    async (mode) => {
+      await runPostCreateIdentityMutation(
+        async (harness) => {
+          await harness.app.vault.rename(
+            harness.sourceFile,
+            'Folder/renamed.md'
+          );
+        },
+        undefined,
+        'present',
+        mode
       );
-    });
-  });
+    }
+  );
 
-  it('cancels and rolls back when the source file is deleted during extraction', async () => {
-    await runPostCreateIdentityMutation(async (harness) => {
-      await harness.app.vault.delete(harness.sourceFile);
-    });
-  });
+  it.each(['linked', 'open'] as const)(
+    'cancels and rolls back when the source file is deleted during %s extraction',
+    async (mode) => {
+      await runPostCreateIdentityMutation(
+        async (harness) => {
+          await harness.app.vault.delete(harness.sourceFile);
+        },
+        undefined,
+        'present',
+        mode
+      );
+    }
+  );
 
-  it('cancels and rolls back when another file replaces the source path', async () => {
-    await runPostCreateIdentityMutation(
-      async (harness, originalCreate) => {
-        await harness.app.vault.delete(harness.sourceFile);
-        const replacement = await originalCreate(
-          IDENTITY_SOURCE_PATH,
-          IDENTITY_SOURCE
-        );
-        expect(replacement).not.toBe(harness.sourceFile);
-      }
-    );
-  });
+  it.each(['linked', 'open'] as const)(
+    'cancels and rolls back when another file replaces the source path during %s extraction',
+    async (mode) => {
+      await runPostCreateIdentityMutation(
+        async (harness, originalCreate) => {
+          await harness.app.vault.delete(harness.sourceFile);
+          const replacement = await originalCreate(
+            IDENTITY_SOURCE_PATH,
+            IDENTITY_SOURCE
+          );
+          expect(replacement).not.toBe(harness.sourceFile);
+        },
+        undefined,
+        'present',
+        mode
+      );
+    }
+  );
 
-  it('cancels and rolls back when the command context rebinds to another same-content file', async () => {
-    await runPostCreateIdentityMutation((harness) => {
-      harness.view.file = harness.otherFile;
-    });
-  });
+  it.each(['linked', 'open'] as const)(
+    'cancels and rolls back when the command context rebinds to another same-content file during %s extraction',
+    async (mode) => {
+      await runPostCreateIdentityMutation(
+        (harness) => {
+          harness.view.file = harness.otherFile;
+        },
+        undefined,
+        'present',
+        mode
+      );
+    }
+  );
 
-  it('cancels and rolls back when the command context rebinds to another same-content editor', async () => {
-    await runPostCreateIdentityMutation((harness) => {
-      harness.view.editor = harness.alternateFixture.editor as Editor;
-    });
-  });
+  it.each(['linked', 'open'] as const)(
+    'cancels and rolls back when the command context rebinds to another same-content editor during %s extraction',
+    async (mode) => {
+      await runPostCreateIdentityMutation(
+        (harness) => {
+          harness.view.editor = harness.alternateFixture.editor as Editor;
+        },
+        undefined,
+        'present',
+        mode
+      );
+    }
+  );
 
   it('cancels and rolls back when an absent context editor becomes present', async () => {
     await runPostCreateIdentityMutation(
@@ -1193,11 +1567,19 @@ describe('SectionalsPlugin', () => {
     );
   });
 
-  it('cancels and rolls back when a present context editor becomes absent', async () => {
-    await runPostCreateIdentityMutation((harness) => {
-      harness.view.editor = undefined;
-    });
-  });
+  it.each(['linked', 'open'] as const)(
+    'cancels and rolls back when a present context editor becomes absent during %s extraction',
+    async (mode) => {
+      await runPostCreateIdentityMutation(
+        (harness) => {
+          harness.view.editor = undefined;
+        },
+        undefined,
+        'present',
+        mode
+      );
+    }
+  );
 
   it('guards source identity after final linktext resolution', async () => {
     await runFinalGuardIdentityMutation((harness) => {
@@ -1220,27 +1602,83 @@ describe('SectionalsPlugin', () => {
     });
   });
 
-  it('guards source identity between final position mappings', async () => {
-    await runFinalGuardIdentityMutation((harness) => {
-      const offsetToPosition = vi.mocked(harness.fixture.editor.offsetToPos);
-      const originalOffsetToPosition = offsetToPosition.getMockImplementation();
-      if (originalOffsetToPosition === undefined) {
-        throw new TypeError('Expected the editor position fake.');
-      }
-      let callCount = 0;
-      offsetToPosition.mockImplementation((offset) => {
-        const position = originalOffsetToPosition(offset);
-        callCount += 1;
-        if (callCount === 1) {
-          harness.view.editor = harness.alternateFixture.editor as Editor;
+  it.each(['linked', 'open'] as const)(
+    'guards %s source identity between final position mappings',
+    async (mode) => {
+      await runFinalGuardIdentityMutation((harness) => {
+        const offsetToPosition = vi.mocked(harness.fixture.editor.offsetToPos);
+        const originalOffsetToPosition = offsetToPosition.getMockImplementation();
+        if (originalOffsetToPosition === undefined) {
+          throw new TypeError('Expected the editor position fake.');
         }
-        return position;
-      });
-    });
-  });
+        let callCount = 0;
+        offsetToPosition.mockImplementation((offset) => {
+          const position = originalOffsetToPosition(offset);
+          callCount += 1;
+          if (callCount === 1) {
+            harness.view.editor = harness.alternateFixture.editor as Editor;
+          }
+          return position;
+        });
+      }, mode);
+    }
+  );
 
-  it('guards source identity after final position mapping', async () => {
+  it.each(['linked', 'open'] as const)(
+    'guards %s source identity after final position mapping',
+    async (mode) => {
+      await runFinalGuardIdentityMutation((harness) => {
+        const offsetToPosition = vi.mocked(harness.fixture.editor.offsetToPos);
+        const originalOffsetToPosition = offsetToPosition.getMockImplementation();
+        if (originalOffsetToPosition === undefined) {
+          throw new TypeError('Expected the editor position fake.');
+        }
+        let callCount = 0;
+        offsetToPosition.mockImplementation((offset) => {
+          const position = originalOffsetToPosition(offset);
+          callCount += 1;
+          if (callCount === 2) {
+            harness.view.file = harness.otherFile;
+          }
+          return position;
+        });
+      }, mode);
+    }
+  );
+
+  it.each(['linked', 'open'] as const)(
+    'rolls back %s extraction without delegating when the pre-replacement identity guard fails',
+    async (mode) => {
+      await runFinalGuardIdentityMutation((harness) => {
+        const getValue = vi.mocked(harness.fixture.editor.getValue);
+        const originalGetValue = getValue.getMockImplementation();
+        if (originalGetValue === undefined) {
+          throw new TypeError('Expected the editor source fake.');
+        }
+        let callCount = 0;
+        getValue.mockImplementation(() => {
+          const source = originalGetValue();
+          callCount += 1;
+          if (callCount === 5) {
+            harness.view.file = harness.otherFile;
+          }
+          return source;
+        });
+      }, mode);
+    }
+  );
+
+  it('rolls back open extraction when the originating leaf stops owning its view before replacement', async () => {
     await runFinalGuardIdentityMutation((harness) => {
+      const originatingLeaf = harness.originatingLeaf;
+      if (originatingLeaf === null) {
+        throw new TypeError('Expected the originating leaf.');
+      }
+      const unrelated = createMarkdownOrigin(
+        harness.app,
+        harness.otherFile,
+        harness.alternateFixture.editor
+      );
       const offsetToPosition = vi.mocked(harness.fixture.editor.offsetToPos);
       const originalOffsetToPosition = offsetToPosition.getMockImplementation();
       if (originalOffsetToPosition === undefined) {
@@ -1251,72 +1689,84 @@ describe('SectionalsPlugin', () => {
         const position = originalOffsetToPosition(offset);
         callCount += 1;
         if (callCount === 2) {
-          harness.view.file = harness.otherFile;
+          originatingLeaf.view = unrelated.view;
         }
         return position;
       });
-    });
+    }, 'open');
   });
 
-  it('rolls back without delegating when the pre-replacement identity guard fails', async () => {
+  it('rolls back open extraction when its view moves to another leaf before replacement', async () => {
     await runFinalGuardIdentityMutation((harness) => {
-      const getValue = vi.mocked(harness.fixture.editor.getValue);
-      const originalGetValue = getValue.getMockImplementation();
-      if (originalGetValue === undefined) {
-        throw new TypeError('Expected the editor source fake.');
+      const unrelated = createMarkdownOrigin(
+        harness.app,
+        harness.otherFile,
+        harness.alternateFixture.editor
+      );
+      const offsetToPosition = vi.mocked(harness.fixture.editor.offsetToPos);
+      const originalOffsetToPosition = offsetToPosition.getMockImplementation();
+      if (originalOffsetToPosition === undefined) {
+        throw new TypeError('Expected the editor position fake.');
       }
       let callCount = 0;
-      getValue.mockImplementation(() => {
-        const source = originalGetValue();
+      offsetToPosition.mockImplementation((offset) => {
+        const position = originalOffsetToPosition(offset);
         callCount += 1;
-        if (callCount === 5) {
-          harness.view.file = harness.otherFile;
+        if (callCount === 2) {
+          Object.defineProperty(harness.view, 'leaf', {
+            configurable: true,
+            value: unrelated.leaf
+          });
         }
-        return source;
+        return position;
       });
-    });
+    }, 'open');
   });
 
-  it('preserves repeat movement state when source identity changes', async () => {
-    const movementSource = '## Alpha\na\n## Beta\nb\n';
-    const movement = createEditor(
-      movementSource,
-      movementSource.indexOf('\na\n') + 1
-    );
-    const harness = await runPostCreateIdentityMutation(
-      (identityHarness) => {
-        identityHarness.view.editor = identityHarness.alternateFixture.editor as Editor;
-      },
-      (identityHarness) => {
-        expect(
-          identityHarness.commands.get('move-current-section-down')
-            ?.editorCheckCallback?.(
-              false,
-              movement.editor as Editor,
-              {} as MarkdownView
-            )
-        ).toBe(true);
-      },
-      'undefined'
-    );
-    const repeatedSource = '## One\none\n## Two\ntwo\n';
-    const repeated = createEditor(
-      repeatedSource,
-      repeatedSource.indexOf('one')
-    );
+  it.each(['linked', 'open'] as const)(
+    'preserves repeat movement state when %s source identity changes',
+    async (mode) => {
+      const movementSource = '## Alpha\na\n## Beta\nb\n';
+      const movement = createEditor(
+        movementSource,
+        movementSource.indexOf('\na\n') + 1
+      );
+      const harness = await runPostCreateIdentityMutation(
+        (identityHarness) => {
+          identityHarness.view.editor = identityHarness.alternateFixture.editor as Editor;
+        },
+        (identityHarness) => {
+          expect(
+            identityHarness.commands.get('move-current-section-down')
+              ?.editorCheckCallback?.(
+                false,
+                movement.editor as Editor,
+                {} as PublicMarkdownView
+              )
+          ).toBe(true);
+        },
+        mode === 'linked' ? 'undefined' : 'present',
+        mode
+      );
+      const repeatedSource = '## One\none\n## Two\ntwo\n';
+      const repeated = createEditor(
+        repeatedSource,
+        repeatedSource.indexOf('one')
+      );
 
-    expect(
-      harness.commands.get('repeat-last-structural-action')
-        ?.editorCheckCallback?.(
-          false,
-          repeated.editor as Editor,
-          {} as MarkdownView
-        )
-    ).toBe(true);
-    expect(repeated.editor.getValue()).toBe(
-      '## Two\ntwo\n## One\none\n'
-    );
-  });
+      expect(
+        harness.commands.get('repeat-last-structural-action')
+          ?.editorCheckCallback?.(
+            false,
+            repeated.editor as Editor,
+            {} as PublicMarkdownView
+          )
+      ).toBe(true);
+      expect(repeated.editor.getValue()).toBe(
+        '## Two\ntwo\n## One\none\n'
+      );
+    }
+  );
 
   it('extracts successfully while an absent context editor remains absent', async () => {
     const harness = createIdentityHarness('undefined');
@@ -1346,21 +1796,30 @@ describe('SectionalsPlugin', () => {
     ).toBeInstanceOf(PublicTFile);
   });
 
-  it('extracts successfully while all captured source identities remain stable', async () => {
-    const harness = createIdentityHarness();
+  it.each(['linked', 'open'] as const)(
+    'extracts successfully in %s mode while all captured source identities remain stable',
+    async (mode) => {
+      const harness = createIdentityHarness('present', mode);
 
-    await invokeIdentityExtraction(harness);
+      await invokeIdentityExtraction(harness);
 
-    expect(harness.fixture.replaceRange).toHaveBeenCalledOnce();
-    expect(harness.fixture.editor.getValue()).toBe(
-      '[[Extract me]]\n'
-    );
-    expect(harness.fixture.setCursor).toHaveBeenCalledOnce();
-    expect(harness.notify).not.toHaveBeenCalled();
-    expect(
-      harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
-    ).toBeInstanceOf(PublicTFile);
-  });
+      expect(harness.fixture.replaceRange).toHaveBeenCalledOnce();
+      expect(harness.fixture.editor.getValue()).toBe(
+        mode === 'linked' ? '[[Extract me]]\n' : ''
+      );
+      if (mode === 'linked') {
+        expect(harness.fixture.setCursor).toHaveBeenCalledOnce();
+        expect(harness.openFile).not.toHaveBeenCalled();
+      } else {
+        expect(harness.fixture.setCursor).not.toHaveBeenCalled();
+        expect(harness.openFile).toHaveBeenCalledOnce();
+      }
+      expect(harness.notify).not.toHaveBeenCalled();
+      expect(
+        harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
+      ).toBeInstanceOf(PublicTFile);
+    }
+  );
 
   it.each(
     [
@@ -1580,28 +2039,65 @@ describe('SectionalsPlugin', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it('keeps the previous movement as the repeat action after extraction', async () => {
-    let completion: Promise<void> | undefined;
-    const execute = vi.fn(() => Promise.resolve(true));
+  it('keeps the previous movement as the repeat action after linked and open extraction', async () => {
+    const extractionSource = '# Extract me\nbody\n';
+    const app = ObsidianApp.createConfigured__({
+      files: {
+        'Notes/linked-source.md': extractionSource,
+        'Notes/open-source.md': extractionSource
+      }
+    });
+    const linkedSourceFile = app.vault.getAbstractFileByPath(
+      'Notes/linked-source.md'
+    );
+    const openSourceFile = app.vault.getAbstractFileByPath(
+      'Notes/open-source.md'
+    );
+    if (
+      !(linkedSourceFile instanceof PublicTFile)
+      || !(linkedSourceFile instanceof TFile)
+      || !(openSourceFile instanceof PublicTFile)
+      || !(openSourceFile instanceof TFile)
+    ) {
+      throw new TypeError('Expected repeat-isolation source files.');
+    }
+    const completions: Promise<void>[] = [];
+    const execute = vi.fn(
+      (
+        _editor: SectionEditor,
+        _sourcePath: string,
+        _execution: ExtractionExecution<PublicTFile>,
+        _runtime: ExtractionRuntime<PublicTFile>,
+        _notify: (details: ExtractionNoticeDetails) => void
+      ) => Promise.resolve(true)
+    );
     const commands = getRegisteredCommands(
-      loadPluginCommands({} as App, {
+      loadPluginCommands(asApp(app), {
         execute,
         notify: vi.fn(),
         observeExecution(execution) {
-          completion = execution;
+          completions.push(execution);
         }
       })
     );
-    const view = {} as MarkdownView;
+    const view = {} as PublicMarkdownView;
     const rememberedSource = '## Alpha\na\n## Beta\nb\n';
     const remembered = createEditor(
       rememberedSource,
       rememberedSource.indexOf('\na\n') + 1
     );
-    const extractionSource = '# Extract me\nbody\n';
-    const extraction = createEditor(
+    const linkedExtraction = createEditor(
       extractionSource,
       extractionSource.indexOf('body')
+    );
+    const openExtraction = createEditor(
+      extractionSource,
+      extractionSource.indexOf('body')
+    );
+    const openOrigin = createMarkdownOrigin(
+      app,
+      openSourceFile,
+      openExtraction.editor
     );
     const repeatedSource = '## One\none\n## Two\ntwo\n';
     const repeated = createEditor(
@@ -1619,15 +2115,41 @@ describe('SectionalsPlugin', () => {
     expect(
       commands.get('extract-current-section-to-linked-note')
         ?.editorCheckCallback?.(
-          false,
-          extraction.editor as Editor,
-          asMarkdownView({
-            editor: extraction.editor,
-            file: { path: 'Notes/source.md' }
-          })
+          true,
+          linkedExtraction.editor as Editor,
+          asMarkdownFileInfo({ file: linkedSourceFile })
         )
     ).toBe(true);
-    await completion;
+    expect(
+      commands.get('extract-current-section-to-new-note')
+        ?.editorCheckCallback?.(
+          true,
+          openExtraction.editor as Editor,
+          openOrigin.view
+        )
+    ).toBe(true);
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          linkedExtraction.editor as Editor,
+          asMarkdownFileInfo({ file: linkedSourceFile })
+        )
+    ).toBe(true);
+    expect(
+      commands.get('extract-current-section-to-new-note')
+        ?.editorCheckCallback?.(
+          false,
+          openExtraction.editor as Editor,
+          openOrigin.view
+        )
+    ).toBe(true);
+    await Promise.all(completions);
+    expect(execute.mock.calls.map((call) => call[2].mode)).toEqual([
+      'linked',
+      'open'
+    ]);
+
     expect(
       commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
         false,
@@ -1645,7 +2167,7 @@ describe('SectionalsPlugin', () => {
     const commands = new Map(
       addCommand.mock.calls.map(([command]) => [command.id, command])
     );
-    const view = {} as MarkdownView;
+    const view = {} as PublicMarkdownView;
     const firstSource = '## Alpha\na\n## Beta\nb\n';
     const first = createEditor(firstSource, firstSource.indexOf('\na\n') + 1);
     const secondSource = '## One\none\n## Two\ntwo\n';
@@ -1688,7 +2210,7 @@ describe('SectionalsPlugin', () => {
       commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
         true,
         fixture.editor as Editor,
-        {} as MarkdownView
+        {} as PublicMarkdownView
       )
     ).toBe(false);
     expect(fixture.replaceRange).not.toHaveBeenCalled();
@@ -1701,7 +2223,7 @@ describe('SectionalsPlugin', () => {
     );
     const source = '## Alpha\na\n## Beta\nb\n';
     const fixture = createEditor(source, source.indexOf('\na\n') + 1);
-    const view = {} as MarkdownView;
+    const view = {} as PublicMarkdownView;
 
     expect(
       commands.get('move-current-section-down')?.editorCheckCallback?.(
@@ -1725,7 +2247,7 @@ describe('SectionalsPlugin', () => {
     const commands = new Map(
       addCommand.mock.calls.map(([command]) => [command.id, command])
     );
-    const view = {} as MarkdownView;
+    const view = {} as PublicMarkdownView;
     const rememberedSource = '## Alpha\na\n## Beta\nb\n';
     const remembered = createEditor(
       rememberedSource,
@@ -1775,7 +2297,7 @@ describe('SectionalsPlugin', () => {
     const commands = new Map(
       addCommand.mock.calls.map(([command]) => [command.id, command])
     );
-    const view = {} as MarkdownView;
+    const view = {} as PublicMarkdownView;
     const sources = [
       '## Alpha\na\n## Beta\nb\n',
       '## One\none\n## Two\ntwo\n',
@@ -1813,7 +2335,7 @@ describe('SectionalsPlugin', () => {
     const commands = new Map(
       addCommand.mock.calls.map(([command]) => [command.id, command])
     );
-    const view = {} as MarkdownView;
+    const view = {} as PublicMarkdownView;
     const rememberedSource = '## Alpha\na\n## Beta\nb\n';
     const remembered = createEditor(
       rememberedSource,
@@ -1847,7 +2369,7 @@ describe('SectionalsPlugin', () => {
     const commands = new Map(
       addCommand.mock.calls.map(([command]) => [command.id, command])
     );
-    const view = {} as MarkdownView;
+    const view = {} as PublicMarkdownView;
     const fencedSource = '# Heading\nbefore\n```ts\ncode\n```\nafter\n';
     const fenced = createEditor(fencedSource, fencedSource.indexOf('code'));
     const calloutSource = '> [!note]\n> body\n';
@@ -1922,7 +2444,7 @@ describe('SectionalsPlugin', () => {
     const source = '# A\nintro\n## B\nchild\n# C\nkeep\n';
     const section = createEditor(source, 2);
     const headingBlock = createEditor(source, 2);
-    const view = {} as MarkdownView;
+    const view = {} as PublicMarkdownView;
 
     commands[0]?.editorCallback?.(section.editor as Editor, view);
     commands[1]?.editorCallback?.(headingBlock.editor as Editor, view);

@@ -1,10 +1,10 @@
 /* eslint-disable perfectionist/sort-modules -- Keep public command contracts and helpers near their existing consumers. */
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
-import type { App, Editor, MarkdownFileInfo, MarkdownView, PluginManifest } from 'obsidian';
+import type { App, Editor, MarkdownFileInfo, PluginManifest, WorkspaceLeaf } from 'obsidian';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
-import { normalizePath, Notice, Plugin, TFile, TFolder } from 'obsidian';
+import { MarkdownView, normalizePath, Notice, Plugin, TFile, TFolder } from 'obsidian';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionMode, DeletionRange, DeletionTarget } from './deletion-planner.ts';
@@ -57,6 +57,10 @@ interface DeleteCommand {
   readonly id: string;
   readonly mode: DeletionMode;
   readonly name: string;
+}
+interface ExtractionOrigin {
+  readonly leaf: WorkspaceLeaf;
+  readonly view: MarkdownView;
 }
 type Notify = (message: string) => void;
 type OpenStructureTargetPicker = (
@@ -257,16 +261,10 @@ export default class SectionalsPlugin extends Plugin {
     this.addCommand({
       editorCheckCallback: (isChecking, editor, context) => {
         const sourceFile = context.file;
-        if (sourceFile === null) {
-          return false;
-        }
-        const source = editor.getValue();
-        const cursorOffset = editor.posToOffset(editor.getCursor('head'));
-        try {
-          if (planSectionExtraction(source, cursorOffset).kind === 'unavailable') {
-            return false;
-          }
-        } catch {
+        if (
+          sourceFile === null
+          || !isExtractionAvailable(editor)
+        ) {
           return false;
         }
         if (!isChecking) {
@@ -279,6 +277,7 @@ export default class SectionalsPlugin extends Plugin {
               expectedSourcePath,
               context,
               expectedContextEditor,
+              null,
               editor
             ),
             expectedSourcePath,
@@ -292,6 +291,50 @@ export default class SectionalsPlugin extends Plugin {
       },
       id: 'extract-current-section-to-linked-note',
       name: 'Extract current section to linked note'
+    });
+
+    this.addCommand({
+      editorCheckCallback: (isChecking, editor, context) => {
+        if (!(context instanceof MarkdownView)) {
+          return false;
+        }
+        const originatingLeaf = getOriginatingMarkdownLeaf(context, editor);
+        const sourceFile = context.file;
+        if (
+          originatingLeaf === null
+          || sourceFile === null
+          || !isExtractionAvailable(editor)
+        ) {
+          return false;
+        }
+        if (!isChecking) {
+          const expectedSourcePath = normalizePath(sourceFile.path);
+          const execution = runExtractionCommand(
+            createGuardedExtractionEditor(
+              this.app,
+              sourceFile,
+              expectedSourcePath,
+              context,
+              editor,
+              { leaf: originatingLeaf, view: context },
+              editor
+            ),
+            expectedSourcePath,
+            {
+              mode: 'open',
+              openCreatedFile(createdFile) {
+                return originatingLeaf.openFile(createdFile);
+              }
+            },
+            createExtractionRuntime(this.app),
+            this.extractionDependencies
+          );
+          this.extractionDependencies.observeExecution(execution);
+        }
+        return true;
+      },
+      id: 'extract-current-section-to-new-note',
+      name: 'Extract current section to new note'
     });
   }
 }
@@ -316,15 +359,23 @@ function createGuardedExtractionEditor(
   expectedSourcePath: string,
   context: MarkdownFileInfo | MarkdownView,
   expectedContextEditor: Editor | undefined,
+  expectedOrigin: ExtractionOrigin | null,
   editor: Editor
 ): ExtractionEditor {
   function assertSourceIdentity(): void {
     try {
       if (
-        sourceFile.path !== expectedSourcePath
-        || app.vault.getAbstractFileByPath(expectedSourcePath) !== sourceFile
-        || context.file !== sourceFile
+        context.file !== sourceFile
         || context.editor !== expectedContextEditor
+        || sourceFile.path !== expectedSourcePath
+        || app.vault.getAbstractFileByPath(expectedSourcePath) !== sourceFile
+        || (
+          expectedOrigin !== null
+          && (
+            expectedOrigin.view.leaf !== expectedOrigin.leaf
+            || expectedOrigin.leaf.view !== expectedOrigin.view
+          )
+        )
       ) {
         throw new ExtractionSourceChangedError();
       }
@@ -366,6 +417,31 @@ function createGuardedExtractionEditor(
       editor.setCursor(position, character);
     }
   };
+}
+
+function getOriginatingMarkdownLeaf(
+  context: MarkdownFileInfo | MarkdownView,
+  editor: Editor
+): null | WorkspaceLeaf {
+  try {
+    if (!(context instanceof MarkdownView) || context.editor !== editor) {
+      return null;
+    }
+    const { leaf } = context;
+    return leaf.view === context ? leaf : null;
+  } catch {
+    return null;
+  }
+}
+
+function isExtractionAvailable(editor: Editor): boolean {
+  try {
+    const source = editor.getValue();
+    const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+    return planSectionExtraction(source, cursorOffset).kind !== 'unavailable';
+  } catch {
+    return false;
+  }
 }
 
 function assertCurrentExtractionFile(app: App, file: TFile): void {
