@@ -326,6 +326,31 @@ describe('analyzeExtractionDependencies reference boundaries', () => {
       use: '[inside][STRASSE]'
     },
     {
+      definition: '[ss]: note.md',
+      name: 'capital sharp S to SS folding',
+      use: '[inside][ẞ]'
+    },
+    {
+      definition: '[k]: note.md',
+      name: 'Kelvin sign case folding',
+      use: '[inside][K]'
+    },
+    {
+      definition: '[ffi]: note.md',
+      name: 'ligature multi-code-point folding',
+      use: '[inside][ﬃ]'
+    },
+    {
+      definition: '[i̇]: note.md',
+      name: 'capital dotted I combining folding',
+      use: '[inside][İ]'
+    },
+    {
+      definition: '[ΐ]: note.md',
+      name: 'Greek combining-sequence folding',
+      use: '[inside][ΐ]'
+    },
+    {
       definition: '[a b]: note.md',
       name: 'collapsed label whitespace',
       use: '[inside][A  B]'
@@ -359,6 +384,18 @@ describe('analyzeExtractionDependencies reference boundaries', () => {
       ).toEqual({ kind: 'invalid', reason: 'cross-boundary-reference' });
     }
   );
+
+  it('keeps Unicode dotless I distinct from ASCII i', () => {
+    const source = '# Extract\n[inside][ı]\n# Keep\n[i]: note.md\n';
+
+    expect(
+      analyzeExtractionDependencies(
+        source,
+        getSectionRange(source, '# Extract'),
+        '# Extract\n\nbody\n'
+      )
+    ).toEqual({ kind: 'ready', targets: [] });
+  });
 
   it('does not rescan the syntax-node array for each parsed link', () => {
     const linkCount = 250;
@@ -527,6 +564,47 @@ describe('analyzeExtractionDependencies footnote boundaries', () => {
         '# Extract\n\nbody\n'
       )
     ).toEqual({ kind: 'invalid', reason: 'cross-boundary-reference' });
+  });
+
+  it('collects hundreds of complete footnote extents with bounded line visits', () => {
+    const definitionCount = 300;
+    const source = `${
+      Array.from(
+        { length: definitionCount },
+        (_value, index) => {
+          const indentation = index === 0 ? '' : '  ';
+          return `${indentation}[^note-${String(index)}]: detail`;
+        }
+      ).join('\n')
+    }\n`;
+    const boundary = source.indexOf('[^note-150]') + '[^note-150]'.length;
+    const originalIndexOf = String.prototype.indexOf;
+    let lineVisits = 0;
+    const indexOfSpy = vi.spyOn(String.prototype, 'indexOf').mockImplementation(
+      function countLineVisits(
+        this: string,
+        searchString: string,
+        position?: number
+      ): number {
+        if (this === source && searchString === '\n') {
+          lineVisits += 1;
+        }
+        return Reflect.apply(originalIndexOf, this, [searchString, position]);
+      }
+    );
+
+    try {
+      expect(
+        analyzeExtractionDependencies(
+          source,
+          { from: 0, to: boundary },
+          'destination\n'
+        )
+      ).toEqual({ kind: 'invalid', reason: 'cross-boundary-reference' });
+    } finally {
+      indexOfSpy.mockRestore();
+    }
+    expect(lineVisits).toBe(definitionCount + 4);
   });
 
   it('rejects a multiline footnote definition that itself crosses the boundary', () => {

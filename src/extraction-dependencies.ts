@@ -4,6 +4,7 @@ import type { MarkdownRange } from './markdown-structure.ts';
 
 import { decodeMarkdownCharacterReference } from './markdown-character-reference.ts';
 import { parseMarkdownStructure } from './markdown-structure.ts';
+import { foldUnicodeCase } from './unicode-case-folding.ts';
 
 export type DependencyAnalysis =
   // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
@@ -28,6 +29,12 @@ export interface RelativeMarkdownTarget {
 interface LabelOccurrences {
   readonly definitions: MarkdownRange[];
   readonly uses: MarkdownRange[];
+}
+
+interface MarkdownLine {
+  readonly from: number;
+  readonly text: string;
+  readonly to: number;
 }
 
 interface MarkdownNode {
@@ -133,38 +140,55 @@ export function rewriteMarkdownTargets(
   return rewritten;
 }
 
+function collectFootnoteDefinitionEnds(
+  lines: readonly MarkdownLine[]
+): readonly number[] {
+  const definitionEnds = Array.from({ length: lines.length }, () => 0);
+  let continuationEnd: number | undefined;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line === undefined) {
+      continue;
+    }
+    definitionEnds[index] = continuationEnd ?? line.to;
+    if (line.text.trim() === '') {
+      continue;
+    }
+    if (FOOTNOTE_CONTINUATION.test(line.text)) {
+      continuationEnd ??= line.to;
+    } else {
+      continuationEnd = undefined;
+    }
+  }
+  return definitionEnds;
+}
+
 function collectFootnoteOccurrences(
   source: string,
   protectedRanges: readonly MarkdownRange[],
   labels: Map<string, LabelOccurrences>
 ): void {
   const definitionStarts = new Set<number>();
-  let lineStart = 0;
-  while (lineStart <= source.length) {
-    const newline = source.indexOf('\n', lineStart);
-    const lineEnd = newline === -1 ? source.length : newline;
-    const line = source.slice(lineStart, lineEnd).replace(/\r$/u, '');
-    const match = /^[\t ]{0,3}\[\^(?<label>[^\]\r\n]+)\]:/u.exec(line);
+  const lines = collectMarkdownLines(source);
+  const definitionEnds = collectFootnoteDefinitionEnds(lines);
+  for (const [index, line] of lines.entries()) {
+    const match = /^[\t ]{0,3}\[\^(?<label>[^\]\r\n]+)\]:/u.exec(line.text);
     const label = match?.groups?.['label'];
     if (
       match !== null
       && label !== undefined
-      && !isProtected(lineStart, protectedRanges)
+      && !isProtected(line.from, protectedRanges)
     ) {
       const marker = match[0];
-      const labelFrom = lineStart + marker.indexOf('[^');
+      const labelFrom = line.from + marker.indexOf('[^');
       const key = normalizeReferenceLabel(`^${label}`);
       const occurrences = getOrCreateOccurrences(labels, key);
       occurrences.definitions.push({
-        from: lineStart,
-        to: getFootnoteDefinitionEnd(source, lineEnd)
+        from: line.from,
+        to: definitionEnds[index] ?? line.to
       });
       definitionStarts.add(labelFrom);
     }
-    if (newline === -1) {
-      break;
-    }
-    lineStart = newline + 1;
   }
 
   const usePattern = /\[\^(?<label>[^\]\r\n]+)\]/gu;
@@ -187,6 +211,25 @@ function collectFootnoteOccurrences(
     );
     occurrences.uses.push({ from, to });
   }
+}
+
+function collectMarkdownLines(source: string): readonly MarkdownLine[] {
+  const lines: MarkdownLine[] = [];
+  let lineStart = 0;
+  while (lineStart <= source.length) {
+    const newline = source.indexOf('\n', lineStart);
+    const lineEnd = newline === -1 ? source.length : newline;
+    lines.push({
+      from: lineStart,
+      text: source.slice(lineStart, lineEnd).replace(/\r$/u, ''),
+      to: lineEnd
+    });
+    if (newline === -1) {
+      break;
+    }
+    lineStart = newline + 1;
+  }
+  return lines;
 }
 
 function collectReferenceOccurrences(
@@ -346,30 +389,6 @@ function getCharacterReferenceAt(markdown: string, offset: number): null | strin
   return CHARACTER_REFERENCE_AT_OFFSET.exec(markdown)?.[0] ?? null;
 }
 
-function getFootnoteDefinitionEnd(source: string, openingLineEnd: number): number {
-  let definitionEnd = openingLineEnd;
-  let lineStart = source[openingLineEnd] === '\n'
-    ? openingLineEnd + 1
-    : source.length;
-
-  while (lineStart < source.length) {
-    const newline = source.indexOf('\n', lineStart);
-    const lineEnd = newline === -1 ? source.length : newline;
-    const line = source.slice(lineStart, lineEnd).replace(/\r$/u, '');
-    if (line.trim() === '') {
-      lineStart = newline === -1 ? source.length : newline + 1;
-      continue;
-    }
-    if (!FOOTNOTE_CONTINUATION.test(line)) {
-      break;
-    }
-    definitionEnd = lineEnd;
-    lineStart = newline === -1 ? source.length : newline + 1;
-  }
-
-  return definitionEnd;
-}
-
 function getOrCreateOccurrences(
   labels: Map<string, LabelOccurrences>,
   key: string
@@ -466,11 +485,11 @@ function isWikilinkLike(source: string, node: MarkdownNode): boolean {
 }
 
 function normalizeReferenceLabel(label: string): string {
-  return decodeMarkdownSyntax(label)
-    .replaceAll(REFERENCE_WHITESPACE, ' ')
-    .trim()
-    .toUpperCase()
-    .toLowerCase();
+  return foldUnicodeCase(
+    decodeMarkdownSyntax(label)
+      .replaceAll(REFERENCE_WHITESPACE, ' ')
+      .trim()
+  );
 }
 
 function parseMarkdown(markdown: string): ParsedMarkdown {
