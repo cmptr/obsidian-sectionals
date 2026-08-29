@@ -117,7 +117,7 @@ export function parseMarkdownStructure(source: string): MarkdownStructure {
           container: containerStack.at(-1) ?? root,
           level,
           lineStart: getHeadingLineStart(source, node),
-          syntaxEnd: node.to,
+          syntaxEnd: getHeadingSyntaxEnd(source, node.to),
           syntaxStart: node.from
         });
       }
@@ -249,6 +249,12 @@ function findPercentCommentRanges(
 
 function getHeadingLineStart(source: string, node: MarkdownNode): number {
   return getLineStart(source, node.from);
+}
+
+function getHeadingSyntaxEnd(source: string, nodeEnd: number): number {
+  return source.slice(nodeEnd - 1, nodeEnd + 1) === '\r\n'
+    ? nodeEnd - 1
+    : nodeEnd;
 }
 
 function getLineEndIncludingBreak(source: string, offset: number): number {

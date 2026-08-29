@@ -134,6 +134,34 @@ describe('planSectionExtraction destination content', () => {
     });
   });
 
+  it.each([
+    {
+      destinationContent: '# Title `Alpha Beta`\n\nbody\n',
+      displayTitle: 'Title Alpha Beta',
+      filenameStem: 'Title Alpha Beta',
+      name: 'code span',
+      source: 'Title `Alpha\nBeta`\n=======\nbody\n'
+    },
+    {
+      destinationContent: '# <span data-label="one two">Alpha</span>\n\nbody\n',
+      displayTitle: 'Alpha',
+      filenameStem: 'Alpha',
+      name: 'HTML attribute',
+      source: '<span data-label="one\ntwo">Alpha</span>\n=======\nbody\n'
+    }
+  ])(
+    'collapses a multiline Setext $name into one physical ATX H1',
+    ({ destinationContent, displayTitle, filenameStem, source }) => {
+      const draft = expectReady(source, source.indexOf('body'));
+
+      expect(draft).toMatchObject({
+        destinationContent,
+        displayTitle,
+        filenameStem
+      });
+    }
+  );
+
   it('rebases descendant headings by one constant offset and preserves skipped levels and block IDs', () => {
     const source = [
       '## Parent',
@@ -296,6 +324,34 @@ describe('createExtractionSourceEdit', () => {
       replacement: '\r\n\r\n[[Folder/Beta|Beta]]\r\n'
     });
     expect(edit.replacement[edit.cursorOffset - edit.range.from]).toBe('[');
+  });
+
+  it('splices an EOF CRLF source without duplicating the retained heading carriage return', () => {
+    const source = '## Beta\r\nbody\r\n';
+    const draft = expectReady(source, source.indexOf('body'));
+    const edit = createExtractionSourceEdit(source.length, draft, '[[Beta]]');
+    const editedSource = source.slice(0, edit.range.from)
+      + edit.replacement
+      + source.slice(edit.range.to);
+
+    expect(draft.sourceBodyRange.from).toBe(source.indexOf('\r\n'));
+    expect(editedSource).toBe('## Beta\r\n\r\n[[Beta]]\r\n');
+    expect(editedSource).not.toContain('\r\r\n');
+  });
+
+  it('splices CRLF before following content without corrupting either boundary', () => {
+    const source = '## Beta\r\nbody\r\n# Next\r\nnext body\r\n';
+    const draft = expectReady(source, source.indexOf('body'));
+    const edit = createExtractionSourceEdit(source.length, draft, '[[Beta]]');
+    const editedSource = source.slice(0, edit.range.from)
+      + edit.replacement
+      + source.slice(edit.range.to);
+
+    expect(draft.sourceBodyRange.from).toBe(source.indexOf('\r\n'));
+    expect(editedSource).toBe(
+      '## Beta\r\n\r\n[[Beta]]\r\n\r\n# Next\r\nnext body\r\n'
+    );
+    expect(editedSource).not.toContain('\r\r\n');
   });
 
   it.each([

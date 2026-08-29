@@ -26,6 +26,25 @@ describe('parseMarkdownStructure', () => {
     ]);
   });
 
+  it.each([
+    ['ATX', '# Heading\r\nbody\r\n', '# Heading'],
+    ['Setext', 'Heading\r\n=======\r\nbody\r\n', '=======']
+  ])(
+    'places %s syntaxEnd before the complete terminating CRLF',
+    (_name, source, syntaxLine) => {
+      const [heading] = parseMarkdownStructure(source).headings;
+      const expectedSyntaxEnd = source.indexOf(
+        '\r\n',
+        source.indexOf(syntaxLine)
+      );
+
+      expect(heading?.syntaxEnd).toBe(expectedSyntaxEnd);
+      expect(source.slice(heading?.syntaxEnd, expectedSyntaxEnd + 2)).toBe(
+        '\r\n'
+      );
+    }
+  );
+
   it('recognizes every ATX heading level', () => {
     const source = '# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n';
     expect(

@@ -90,7 +90,9 @@ export function planSectionExtraction(
   }
 
   const title = deriveExtractionTitle(
-    extractHeadingMarkup(source, section.heading)
+    collapseHeadingLineBoundaries(
+      extractHeadingMarkup(source, section.heading)
+    )
   );
   const filenameStem = sanitizeFilenameStem(title.displayTitle);
   if (filenameStem === null) {
@@ -146,10 +148,7 @@ function createDestinationBody(
     }
 
     const replacementFrom = heading.lineStart - contentStart;
-    const replacementTo = getHeadingSyntaxContentEnd(
-      source,
-      heading.syntaxEnd
-    ) - contentStart;
+    const replacementTo = heading.syntaxEnd - contentStart;
     const headingMarkup = collapseHeadingLineBoundaries(
       extractHeadingMarkup(source, heading)
     );
@@ -171,20 +170,14 @@ function detectLineEnding(
   source: string,
   headingSyntaxEnd: number
 ): ExtractionLineEnding {
-  return source.startsWith('\r\n', headingSyntaxEnd)
-      || source.slice(headingSyntaxEnd - 1, headingSyntaxEnd + 1) === '\r\n'
-    ? '\r\n'
-    : '\n';
+  return source.startsWith('\r\n', headingSyntaxEnd) ? '\r\n' : '\n';
 }
 
 function extractHeadingMarkup(
   source: string,
   heading: MarkdownHeading
 ): string {
-  const headingSyntax = source.slice(
-    heading.syntaxStart,
-    getHeadingSyntaxContentEnd(source, heading.syntaxEnd)
-  );
+  const headingSyntax = source.slice(heading.syntaxStart, heading.syntaxEnd);
   if (/^[\t ]{0,3}#{1,6}(?:[\t ]+|$)/u.test(headingSyntax)) {
     return headingSyntax
       .replace(/^[\t ]{0,3}#{1,6}(?:[\t ]+|$)/u, '')
@@ -193,15 +186,6 @@ function extractHeadingMarkup(
 
   const underlineStart = headingSyntax.lastIndexOf('\n');
   return headingSyntax.slice(0, underlineStart).replace(/\r$/u, '');
-}
-
-function getHeadingSyntaxContentEnd(
-  source: string,
-  headingSyntaxEnd: number
-): number {
-  return source.at(headingSyntaxEnd - 1) === '\r'
-    ? headingSyntaxEnd - 1
-    : headingSyntaxEnd;
 }
 
 function getOwnedLineEndingLength(
