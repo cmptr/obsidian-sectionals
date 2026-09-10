@@ -1,16 +1,29 @@
 import { execFileSync } from 'node:child_process';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Node imports compact.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Node imports compact.
 import { join, resolve } from 'node:path';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 
+import type { ReleaseFiles } from './release.ts';
+
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible release imports compact.
 import { assertReleaseBranch, incrementStableVersion, prepareReleaseFiles, validateReleaseFiles } from './release.ts';
 
 const EXECUTABLE_FILE_MODE = 0o755;
+const JSON_INDENT = 2;
+const EXPECTED_DESCRIPTION = 'Edit complete Markdown structures at the cursor without selecting exact lines.';
+const EXPECTED_MINIMUM_APP_VERSION = '1.8.9';
+const STABLE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
+const HISTORICAL_VERSION_MAPPINGS = {
+  '0.1.0': EXPECTED_MINIMUM_APP_VERSION,
+  '0.1.1': EXPECTED_MINIMUM_APP_VERSION,
+  '0.1.2': EXPECTED_MINIMUM_APP_VERSION,
+  '0.2.0': EXPECTED_MINIMUM_APP_VERSION,
+  '0.2.1': EXPECTED_MINIMUM_APP_VERSION
+} as const;
 
 const releaseFiles = {
   changelog: '# Changelog\n\n## Unreleased\n\n- Add structural deletion.\n\n## 0.1.0\n\n- Initial release.\n',
@@ -18,6 +31,90 @@ const releaseFiles = {
   packageJson: '{\n  "name": "sectionals",\n  "version": "0.1.0"\n}\n',
   versions: '{\n  "0.1.0": "1.8.9"\n}\n'
 } as const;
+
+const pre030ReleaseFiles = {
+  changelog: '# Changelog\n\n## Unreleased\n\n- Add release hardening.\n\n## 0.2.1\n\n- Previous release.\n',
+  manifest: `${
+    JSON.stringify(
+      {
+        author: 'Aaron Bell',
+        description: EXPECTED_DESCRIPTION,
+        id: 'sectionals',
+        isDesktopOnly: false,
+        minAppVersion: EXPECTED_MINIMUM_APP_VERSION,
+        name: 'Sectionals',
+        version: '0.2.1'
+      },
+      null,
+      JSON_INDENT
+    )
+  }\n`,
+  packageJson: `${
+    JSON.stringify(
+      {
+        description: EXPECTED_DESCRIPTION,
+        name: 'sectionals',
+        version: '0.2.1'
+      },
+      null,
+      JSON_INDENT
+    )
+  }\n`,
+  versions: `${JSON.stringify(HISTORICAL_VERSION_MAPPINGS, null, JSON_INDENT)}\n`
+} as const;
+
+function assertReleaseMetadata(root: string): void {
+  const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf-8')) as Record<string, unknown>;
+  const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8')) as Record<string, unknown>;
+  const versions = JSON.parse(readFileSync(join(root, 'versions.json'), 'utf-8')) as Record<string, unknown>;
+  const currentVersion = manifest['version'];
+
+  expect(currentVersion).toBeTypeOf('string');
+  if (typeof currentVersion !== 'string') {
+    throw new TypeError('manifest.json version must be a string');
+  }
+
+  expect(currentVersion).toMatch(STABLE_VERSION);
+  expect(packageJson['version']).toBe(currentVersion);
+  expect({
+    manifest: {
+      description: manifest['description'],
+      id: manifest['id'],
+      minAppVersion: manifest['minAppVersion'],
+      name: manifest['name']
+    },
+    package: {
+      description: packageJson['description'],
+      name: packageJson['name']
+    }
+  }).toEqual({
+    manifest: {
+      description: EXPECTED_DESCRIPTION,
+      id: 'sectionals',
+      minAppVersion: EXPECTED_MINIMUM_APP_VERSION,
+      name: 'Sectionals'
+    },
+    package: {
+      description: EXPECTED_DESCRIPTION,
+      name: 'sectionals'
+    }
+  });
+  expect(versions).toMatchObject(HISTORICAL_VERSION_MAPPINGS);
+  for (const [version, minimumAppVersion] of Object.entries(versions)) {
+    expect(version).toMatch(STABLE_VERSION);
+    expect(minimumAppVersion).toEqual(expect.stringMatching(STABLE_VERSION));
+  }
+  expect(versions[currentVersion]).toBe(manifest['minAppVersion']);
+}
+
+function readReleaseFilesAt(root: string): ReleaseFiles {
+  return {
+    changelog: readFileSync(join(root, 'CHANGELOG.md'), 'utf-8'),
+    manifest: readFileSync(join(root, 'manifest.json'), 'utf-8'),
+    packageJson: readFileSync(join(root, 'package.json'), 'utf-8'),
+    versions: readFileSync(join(root, 'versions.json'), 'utf-8')
+  };
+}
 
 describe('incrementStableVersion', () => {
   it.each(
@@ -125,47 +222,58 @@ describe('assertReleaseBranch', () => {
 });
 
 describe('release metadata', () => {
-  it('keeps plugin metadata synchronized with the supported release history', () => {
-    const manifest = JSON.parse(readFileSync('manifest.json', 'utf-8')) as Record<string, unknown>;
-    const packageJson = JSON.parse(readFileSync('package.json', 'utf-8')) as Record<string, unknown>;
-    const versions = JSON.parse(readFileSync('versions.json', 'utf-8')) as Record<string, unknown>;
+  it('keeps fixed plugin metadata synchronized with the current stable version', () => {
+    assertReleaseMetadata('.');
+  });
 
-    expect(packageJson['description']).toBe(manifest['description']);
-    expect({
-      manifest: {
-        description: manifest['description'],
-        id: manifest['id'],
-        minAppVersion: manifest['minAppVersion'],
-        name: manifest['name'],
-        version: manifest['version']
-      },
-      package: {
-        description: packageJson['description'],
-        name: packageJson['name'],
-        version: packageJson['version']
-      },
-      versions
-    }).toEqual({
-      manifest: {
-        description: 'Edit complete Markdown structures at the cursor without selecting exact lines.',
-        id: 'sectionals',
-        minAppVersion: '1.8.9',
-        name: 'Sectionals',
-        version: '0.2.1'
-      },
-      package: {
-        description: 'Edit complete Markdown structures at the cursor without selecting exact lines.',
-        name: 'sectionals',
-        version: '0.2.1'
-      },
-      versions: {
-        '0.1.0': '1.8.9',
-        '0.1.1': '1.8.9',
-        '0.1.2': '1.8.9',
-        '0.2.0': '1.8.9',
-        '0.2.1': '1.8.9'
-      }
-    });
+  it('accepts accumulated history when preparing 0.3.1 after 0.3.0 through the real release path', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'sectionals-prepare-release-'));
+
+    try {
+      mkdirSync(join(repo, 'scripts'));
+      writeFileSync(join(repo, 'CHANGELOG.md'), pre030ReleaseFiles.changelog);
+      writeFileSync(join(repo, 'manifest.json'), pre030ReleaseFiles.manifest);
+      writeFileSync(join(repo, 'package.json'), pre030ReleaseFiles.packageJson);
+      writeFileSync(join(repo, 'versions.json'), pre030ReleaseFiles.versions);
+      writeFileSync(join(repo, 'Makefile'), readFileSync('Makefile', 'utf-8'));
+      writeFileSync(join(repo, 'scripts', 'release.ts'), readFileSync('scripts/release.ts', 'utf-8'));
+
+      execFileSync('git', ['init', '--initial-branch=master'], { cwd: repo });
+      execFileSync('git', ['config', 'user.name', 'Release Test'], { cwd: repo });
+      execFileSync('git', ['config', 'user.email', 'release@example.com'], { cwd: repo });
+      execFileSync('git', ['add', '.'], { cwd: repo });
+      execFileSync('git', ['commit', '-m', 'Release candidate'], { cwd: repo });
+      writeFileSync(join(repo, '.git', 'info', 'exclude'), 'node_modules\n', { flag: 'a' });
+      symlinkSync(resolve('node_modules'), join(repo, 'node_modules'));
+
+      execFileSync('make', ['--no-print-directory', 'prepare-release', 'VERSION=0.3.0'], { cwd: repo });
+
+      expect(() => {
+        validateReleaseFiles(readReleaseFilesAt(repo), '0.3.0');
+      }).not.toThrow();
+      assertReleaseMetadata(repo);
+
+      execFileSync('git', ['add', 'CHANGELOG.md', 'manifest.json', 'package.json', 'versions.json'], { cwd: repo });
+      execFileSync('git', ['commit', '-m', 'Release 0.3.0'], { cwd: repo });
+      writeFileSync(
+        join(repo, 'CHANGELOG.md'),
+        readFileSync(join(repo, 'CHANGELOG.md'), 'utf-8').replace(
+          '## Unreleased\n\n',
+          '## Unreleased\n\n- Fix release history validation.\n\n'
+        )
+      );
+      execFileSync('git', ['add', 'CHANGELOG.md'], { cwd: repo });
+      execFileSync('git', ['commit', '-m', 'Add 0.3.1 release note'], { cwd: repo });
+
+      execFileSync('make', ['--no-print-directory', 'prepare-release', 'VERSION=0.3.1'], { cwd: repo });
+
+      expect(() => {
+        validateReleaseFiles(readReleaseFilesAt(repo), '0.3.1');
+      }).not.toThrow();
+      assertReleaseMetadata(repo);
+    } finally {
+      rmSync(repo, { force: true, recursive: true });
+    }
   });
 });
 

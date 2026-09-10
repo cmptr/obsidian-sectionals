@@ -196,6 +196,17 @@ describe('compatibility floor', () => {
   });
 
   it.each([
+    'let a=RegExp("(?<=x)y","giu");',
+    'let a=RegExp(`(?<!x)y`,"u");',
+    'let a=new RegExp("(?<!x)y","giu");',
+    'let a=new RegExp(`(?<=x)y`,"u");'
+  ])('rejects minified static RegExp constructor lookbehind: %s', (source) => {
+    expect(() => {
+      assertMobileCompatibleJavaScript(source);
+    }).toThrow('regex lookbehind');
+  });
+
+  it.each([
     String.raw`let a=/\(?<=/u;`,
     String.raw`let a=/\(?<!/u;`,
     'let a=/[(?<=]/u;',
@@ -206,12 +217,35 @@ describe('compatibility floor', () => {
     }).not.toThrow();
   });
 
-  it('allows lookbehind text in strings, templates, and comments', () => {
+  it.each([
+    String.raw`let a=RegExp("\\(?<=x)y","u");`,
+    'let a=RegExp("[(?<!]","u");',
+    'let a=new RegExp(`[(?<=]`,"u");',
+    'let a=new RegExp(`\\\\(?<!x)y`,"u");'
+  ])('allows escaped or character-class constructor text: %s', (source) => {
+    expect(() => {
+      assertMobileCompatibleJavaScript(source);
+    }).not.toThrow();
+  });
+
+  it('allows inert constructor text in strings, templates, and comments', () => {
     const source = [
-      'const string = "/(?<=x)y/";',
-      'const template = `/(?<!x)y/`;',
-      '// /(?<=x)y/',
-      '/* /(?<!x)y/ */'
+      'const string = \'RegExp("(?<=x)y","u")\';',
+      'const template = `new RegExp("(?<!x)y","u")`;',
+      '// RegExp("(?<=x)y","u")',
+      '/* new RegExp("(?<!x)y","u") */'
+    ].join('\n');
+
+    expect(() => {
+      assertMobileCompatibleJavaScript(source);
+    }).not.toThrow();
+  });
+
+  it('does not infer dynamic or non-direct RegExp constructor patterns', () => {
+    const source = [
+      'const dynamic = RegExp(pattern,"u");',
+      ['const interpolated = new RegExp(`$', '{prefix}(?<=x)y`,"u");'].join(''),
+      'const qualified = globalThis.RegExp("(?<!x)y","u");'
     ].join('\n');
 
     expect(() => {

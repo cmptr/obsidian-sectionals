@@ -1,10 +1,14 @@
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible TypeScript imports compact.
-import type { Node, RegularExpressionLiteral } from 'typescript';
+import type { Node } from 'typescript';
 
 import {
   createSourceFile,
   forEachChild,
+  isCallExpression,
+  isIdentifier,
+  isNewExpression,
+  isNoSubstitutionTemplateLiteral,
   isRegularExpressionLiteral,
+  isStringLiteral,
   ScriptKind,
   ScriptTarget,
   transpileModule
@@ -58,11 +62,11 @@ export function inspectUnicodeEscapes(source: string): UnicodeEscapeStats {
   };
 }
 
-function containsRegexLookbehind(literal: string): boolean {
+function containsRegexLookbehind(pattern: string, startIndex = 0, shouldStopAtDelimiter = false): boolean {
   let isInsideCharacterClass = false;
   let isEscaped = false;
-  for (let index = 1; index < literal.length; index += 1) {
-    const character = literal[index];
+  for (let index = startIndex; index < pattern.length; index += 1) {
+    const character = pattern[index];
     if (isEscaped) {
       isEscaped = false;
       continue;
@@ -79,14 +83,14 @@ function containsRegexLookbehind(literal: string): boolean {
       isInsideCharacterClass = false;
       continue;
     }
-    if (character === '/' && !isInsideCharacterClass) {
+    if (shouldStopAtDelimiter && character === '/' && !isInsideCharacterClass) {
       return false;
     }
     if (
       !isInsideCharacterClass
       && (
-        literal.startsWith('(?<=', index)
-        || literal.startsWith('(?<!', index)
+        pattern.startsWith('(?<=', index)
+        || pattern.startsWith('(?<!', index)
       )
     ) {
       return true;
@@ -95,9 +99,29 @@ function containsRegexLookbehind(literal: string): boolean {
   return false;
 }
 
-function findRegexLookbehind(node: Node): RegularExpressionLiteral | undefined {
-  if (isRegularExpressionLiteral(node) && containsRegexLookbehind(node.text)) {
+function findRegexLookbehind(node: Node): Node | undefined {
+  const staticPattern = getStaticRegExpPattern(node);
+  if (
+    (isRegularExpressionLiteral(node) && containsRegexLookbehind(node.text, 1, true))
+    || (staticPattern !== undefined && containsRegexLookbehind(staticPattern))
+  ) {
     return node;
   }
   return forEachChild(node, findRegexLookbehind);
+}
+
+function getStaticRegExpPattern(node: Node): string | undefined {
+  if (
+    (!isCallExpression(node) && !isNewExpression(node))
+    || !isIdentifier(node.expression)
+    || node.expression.text !== 'RegExp'
+  ) {
+    return undefined;
+  }
+
+  const pattern = node.arguments?.[0];
+  if (pattern === undefined || (!isStringLiteral(pattern) && !isNoSubstitutionTemplateLiteral(pattern))) {
+    return undefined;
+  }
+  return pattern.text;
 }

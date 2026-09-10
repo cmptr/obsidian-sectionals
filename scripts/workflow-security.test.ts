@@ -14,6 +14,9 @@ const DOWNLOAD_ARTIFACT_REFERENCE = 'actions/download-artifact@d3f86a106a0bac45b
 const NODE_SETUP_REFERENCE = 'actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38';
 const PNPM_SETUP_REFERENCE = 'pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320';
 const UPLOAD_ARTIFACT_REFERENCE = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02';
+const GH_REPOSITORY_CONTEXT = ['$', '{{ github.repository }}'].join('');
+const GH_REPOSITORY_NAME_CONTEXT = ['$', '{{ github.event.repository.name }}'].join('');
+const GH_TOKEN_CONTEXT = ['$', '{{ github.token }}'].join('');
 const FULL_ACTION_SHA = /@[0-9a-f]{40}$/u;
 const SECRET_INTERPOLATION = /\$\{\{\s*secrets(?:\.|\[)/iu;
 const VALID_MAIN_DIGEST = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -180,6 +183,7 @@ jobs:
           subject-path: dist/manifest.json
       - name: Publish GitHub release
         env:
+          GH_REPO: \${{ github.repository }}
           GH_TOKEN: \${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \\
@@ -463,6 +467,30 @@ describe('release workflow privilege boundary', () => {
       EXPECTED_RELEASE_WORKFLOW_SOURCE,
       '            dist/main.js \\\n            dist/manifest.json\n',
       '            dist/main.js \\\n            dist/manifest.json \\\n            dist/release.zip\n'
+    );
+
+    expect(() => {
+      assertReleaseWorkflowContract(mutated);
+    }).toThrow();
+  });
+
+  it('rejects missing explicit repository context for publication', () => {
+    const mutated = replaceExactlyOnce(
+      EXPECTED_RELEASE_WORKFLOW_SOURCE,
+      `          GH_REPO: ${GH_REPOSITORY_CONTEXT}\n          GH_TOKEN: ${GH_TOKEN_CONTEXT}\n`,
+      `          GH_TOKEN: ${GH_TOKEN_CONTEXT}\n`
+    );
+
+    expect(() => {
+      assertReleaseWorkflowContract(mutated);
+    }).toThrow();
+  });
+
+  it('rejects incorrect explicit repository context for publication', () => {
+    const mutated = replaceExactlyOnce(
+      EXPECTED_RELEASE_WORKFLOW_SOURCE,
+      `          GH_REPO: ${GH_REPOSITORY_CONTEXT}\n`,
+      `          GH_REPO: ${GH_REPOSITORY_NAME_CONTEXT}\n`
     );
 
     expect(() => {
