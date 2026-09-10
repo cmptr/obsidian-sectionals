@@ -1,5 +1,7 @@
 import { performance } from 'node:perf_hooks';
 
+import type { MarkdownStructure } from '../src/markdown-structure.ts';
+
 import { planContextualDeletionWithContext } from '../src/deletion-planner.ts';
 import { parseMarkdownStructure } from '../src/markdown-structure.ts';
 import { isSectionExtractionAvailableWithContext } from '../src/section-extraction-availability.ts';
@@ -13,13 +15,19 @@ import { createPercentCommentFixture, createPlanningFixture } from './structural
 interface BenchmarkCase {
   readonly large: BenchmarkInput;
   readonly name: string;
-  run(input: BenchmarkInput): number;
+  run(input: BenchmarkInput): BenchmarkRunResult;
   readonly small: BenchmarkInput;
+  validateResult(
+    result: BenchmarkRunResult,
+    input: BenchmarkInput,
+    benchmarkName: string
+  ): void;
 }
 
 interface BenchmarkInput {
   readonly expectedResult: number;
   readonly label: string;
+  readonly offsets?: FixtureOffsets;
   readonly size: number;
   readonly source: string;
 }
@@ -30,6 +38,8 @@ interface BenchmarkResult {
   readonly smallMedianMilliseconds: number;
   readonly timeRatio: number;
 }
+
+type BenchmarkRunResult = MarkdownStructure | number;
 
 interface FixtureOffsets {
   readonly blockquote: number;
@@ -70,11 +80,13 @@ function createPercentInput(blockCount: number): BenchmarkInput {
 }
 
 function createPlanningInput(byteLength: number): BenchmarkInput {
+  const source = createPlanningFixture(byteLength);
   return {
     expectedResult: 1,
     label: `${formatInteger(byteLength)} bytes`,
+    offsets: getFixtureOffsets(source),
     size: byteLength,
-    source: createPlanningFixture(byteLength)
+    source
   };
 }
 
@@ -102,11 +114,7 @@ function measure(input: BenchmarkInput, benchmarkCase: BenchmarkCase): number {
   const start = performance.now();
   const result = benchmarkCase.run(input);
   const duration = performance.now() - start;
-  if (result !== input.expectedResult) {
-    throw new TypeError(
-      `${benchmarkCase.name} returned ${String(result)} for ${input.label}; expected ${String(input.expectedResult)}.`
-    );
-  }
+  benchmarkCase.validateResult(result, input, benchmarkCase.name);
   assertMeasurement(duration, `${benchmarkCase.name} for ${input.label}`);
   return duration;
 }
@@ -136,6 +144,13 @@ function printResult(
       result.timeRatio.toFixed(DECIMAL_PLACE_COUNT)
     }x (non-blocking)`
   );
+}
+
+function requireFixtureOffsets(input: BenchmarkInput): FixtureOffsets {
+  if (input.offsets === undefined) {
+    throw new TypeError(`Missing precomputed fixture offsets for ${input.label}.`);
+  }
+  return input.offsets;
 }
 
 function runBenchmarkCase(benchmarkCase: BenchmarkCase): BenchmarkResult {
@@ -190,7 +205,7 @@ function runContextCreation(input: BenchmarkInput): number {
 
 function runContextSharedChecks(input: BenchmarkInput): number {
   const context = createStructuralPlanningContext(input.source);
-  const offsets = getFixtureOffsets(input.source);
+  const offsets = requireFixtureOffsets(input);
   let successfulResults = 0;
 
   for (const mode of ['up', 'down', 'start', 'end'] as const) {
@@ -240,13 +255,52 @@ function runContextSharedChecks(input: BenchmarkInput): number {
 function runFullExtractionPlan(input: BenchmarkInput): number {
   const plan = planSectionExtraction(
     input.source,
-    getFixtureOffsets(input.source).target
+    requireFixtureOffsets(input).target
   );
   return plan.kind === 'ready' ? 1 : 0;
 }
 
-function runPercentCommentParse(input: BenchmarkInput): number {
-  return parseMarkdownStructure(input.source).blocks.length;
+function runPercentCommentParse(input: BenchmarkInput): MarkdownStructure {
+  return parseMarkdownStructure(input.source);
+}
+
+function validateCountResult(
+  result: BenchmarkRunResult,
+  input: BenchmarkInput,
+  benchmarkName: string
+): void {
+  if (typeof result !== 'number') {
+    throw new TypeError(`${benchmarkName} returned an invalid result for ${input.label}.`);
+  }
+  if (result !== input.expectedResult) {
+    throw new TypeError(
+      `${benchmarkName} returned ${String(result)} for ${input.label}; expected ${String(input.expectedResult)}.`
+    );
+  }
+}
+
+function validatePercentCommentResult(
+  result: BenchmarkRunResult,
+  input: BenchmarkInput,
+  benchmarkName: string
+): void {
+  if (typeof result === 'number') {
+    throw new TypeError(`${benchmarkName} returned an invalid result for ${input.label}.`);
+  }
+  const fencedBlockCount = result.blocks.filter(
+    (block) => block.kind === 'fenced-code'
+  ).length;
+  const protectedRangeCount = result.protectedRanges.length;
+  if (
+    fencedBlockCount !== input.expectedResult
+    || protectedRangeCount !== input.expectedResult
+  ) {
+    throw new TypeError(
+      `${benchmarkName} returned ${String(fencedBlockCount)} fenced blocks and ${
+        String(protectedRangeCount)
+      } protected ranges for ${input.label}; expected ${String(input.expectedResult)} of each.`
+    );
+  }
 }
 
 function writeOutput(message: string): void {
@@ -260,25 +314,29 @@ const benchmarkCases: readonly BenchmarkCase[] = [
     large: largePlanningInput,
     name: 'One structural context creation',
     run: runContextCreation,
-    small: smallPlanningInput
+    small: smallPlanningInput,
+    validateResult: validateCountResult
   },
   {
     large: largePlanningInput,
     name: 'One context-shared 11-check batch',
     run: runContextSharedChecks,
-    small: smallPlanningInput
+    small: smallPlanningInput,
+    validateResult: validateCountResult
   },
   {
     large: largePlanningInput,
     name: 'One full extraction plan',
     run: runFullExtractionPlan,
-    small: smallPlanningInput
+    small: smallPlanningInput,
+    validateResult: validateCountResult
   },
   {
     large: createPercentInput(PERCENT_BLOCK_COUNT * PERCENT_SCALE_FACTOR),
     name: 'Percent-comment parsing',
     run: runPercentCommentParse,
-    small: createPercentInput(PERCENT_BLOCK_COUNT)
+    small: createPercentInput(PERCENT_BLOCK_COUNT),
+    validateResult: validatePercentCommentResult
   }
 ];
 

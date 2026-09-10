@@ -134,12 +134,8 @@ describe('structural planning performance fixtures', () => {
         '## Flat omega'
       ])
     );
-    expect(visibleHeadingLines).not.toEqual(
-      expect.arrayContaining([
-        '# protected fenced heading',
-        '# protected percent heading'
-      ])
-    );
+    expect(visibleHeadingLines).not.toContain('# protected fenced heading');
+    expect(visibleHeadingLines).not.toContain('# protected percent heading');
     expect(
       structure.blocks.some((block) => block.kind === 'fenced-code')
     ).toBe(true);
@@ -180,6 +176,7 @@ describe('structural planning performance fixtures', () => {
       expect(
         structure.blocks.filter((block) => block.kind === 'fenced-code')
       ).toHaveLength(blockCount);
+      expect(structure.protectedRanges).toHaveLength(blockCount);
     }
   );
 });
