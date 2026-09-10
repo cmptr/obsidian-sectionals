@@ -345,12 +345,16 @@ describe('executeSectionExtraction success', () => {
       'offsetToPos:0',
       'offsetToPos:12',
       'getValue',
+      'target-check:Extracted/Beta.md:1',
       'replaceRange',
       'getValue',
       'offsetToPos:0',
       'setCursor'
     ]);
-    expect(runtime.isCurrentFile).not.toHaveBeenCalled();
+    expect(runtime.isCurrentFile).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ path: 'Extracted/Beta.md' }),
+      'Extracted/Beta.md'
+    );
   });
 
   it('revalidates a resolved target after each await and immediately before mutation', async () => {
@@ -404,7 +408,7 @@ describe('executeSectionExtraction success', () => {
         return previousIndex === undefined || index > previousIndex;
       })
     ).toBe(true);
-    expect(runtime.isCurrentFile).toHaveBeenCalledTimes(3);
+    expect(runtime.isCurrentFile).toHaveBeenCalledTimes(4);
   });
 
   it('executes open mode only after inspecting the exact source commit', async () => {
@@ -899,6 +903,62 @@ describe('executeSectionExtraction created-file identity', () => {
 });
 
 describe('executeSectionExtraction final commit gate', () => {
+  it('retains the source when the destination identity is replaced after readback settles', async () => {
+    const source = '# Beta\nbody\n';
+    const editor = new StatefulEditor(source, 9);
+    const runtime = new StatefulRuntime();
+    let replacement: FakeFile | undefined;
+    runtime.read.mockImplementationOnce(async (file) => {
+      const entry = runtime.files.get(file.path);
+      if (entry === undefined) {
+        throw new Error('missing destination');
+      }
+      queueMicrotask(() => {
+        replacement = new FakeFile(999, file.basename, file.path);
+        runtime.files.set(file.path, {
+          content: 'replacement bytes',
+          file: replacement
+        });
+      });
+      return entry.content;
+    });
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(runtime.files.get('Extracted/Beta.md')?.file).toBe(replacement);
+    expect(editor.currentSource()).toBe(source);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+  });
+
+  it('retains the source when the final destination identity check throws', async () => {
+    const source = '# Beta\nbody\n';
+    const editor = new StatefulEditor(source, 9);
+    const runtime = new StatefulRuntime();
+    runtime.isCurrentFile.mockImplementationOnce(() => {
+      throw new Error('identity lookup failed');
+    });
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe(source);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(notices).toEqual([{
+      kind: 'destination-changed',
+      path: 'Extracted/Beta.md'
+    }]);
+  });
+
   it('does not yield after the matching final source snapshot', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();

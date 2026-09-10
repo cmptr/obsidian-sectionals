@@ -605,6 +605,13 @@ function getCommitDestinationFailure<File extends ExtractionFile>(
   if (!doesCreatedDestinationMatch(creation)) {
     return createCommitDestinationChanged(creation.intendedPath);
   }
+  try {
+    if (!runtime.isCurrentFile(creation.file, creation.intendedPath)) {
+      return createCommitDestinationChanged(creation.intendedPath);
+    }
+  } catch {
+    return createCommitDestinationChanged(creation.intendedPath);
+  }
   return areResolvedTargetsCurrent(runtime, creation)
     ? null
     : createCommitRelativeTargetChanged(creation.intendedPath);
