@@ -45,6 +45,96 @@ describe('parseMarkdownStructure', () => {
     }
   );
 
+  it('describes only the opening ATX marker as mutable syntax', () => {
+    const source = '### Title ##\n';
+
+    expect(parseMarkdownStructure(source).headings[0]?.syntax).toEqual({
+      kind: 'atx',
+      openingMarkerRange: { from: 0, to: 3 }
+    });
+  });
+
+  it.each([
+    ['one-space indentation', ' ### Title\n', { from: 1, to: 4 }],
+    ['three-space indentation', '   ### Title\r\n', { from: 3, to: 6 }],
+    ['nested quote prefix', '> > ### Title ##\n', { from: 4, to: 7 }]
+  ])('locates the physical ATX opener with %s', (_name, source, range) => {
+    expect(parseMarkdownStructure(source).headings[0]?.syntax).toEqual({
+      kind: 'atx',
+      openingMarkerRange: range
+    });
+  });
+
+  it('describes quoted Setext title and underline bytes exactly', () => {
+    const source = '> Title\r\n> -----  \r\n';
+
+    expect(parseMarkdownStructure(source).headings[0]?.syntax).toEqual({
+      kind: 'setext',
+      lineEnding: '\r\n',
+      linePrefix: '> ',
+      titleRanges: [{ from: 2, to: 7 }],
+      underlineMarkerRange: { from: 11, to: 16 }
+    });
+  });
+
+  it.each(
+    [
+      [
+        'multiline LF',
+        'First\nsecond\n-----\n',
+        {
+          kind: 'setext',
+          lineEnding: '\n',
+          linePrefix: '',
+          titleRanges: [
+            { from: 0, to: 5 },
+            { from: 6, to: 12 }
+          ],
+          underlineMarkerRange: { from: 13, to: 18 }
+        }
+      ],
+      [
+        'three-space indentation',
+        '   Title\n   =====\n',
+        {
+          kind: 'setext',
+          lineEnding: '\n',
+          // eslint-disable-next-line unicorn/prefer-string-repeat -- Keep the physical syntax expectation literal.
+          linePrefix: '   ',
+          titleRanges: [{ from: 3, to: 8 }],
+          underlineMarkerRange: { from: 12, to: 17 }
+        }
+      ],
+      [
+        'nested quote prefix at EOF',
+        '> > First\n> > second\n> > -----',
+        {
+          kind: 'setext',
+          lineEnding: '',
+          linePrefix: '> > ',
+          titleRanges: [
+            { from: 4, to: 9 },
+            { from: 14, to: 20 }
+          ],
+          underlineMarkerRange: { from: 25, to: 30 }
+        }
+      ],
+      [
+        'callout body prefix',
+        '> [!note]\n>\n> Title\n> -----\n',
+        {
+          kind: 'setext',
+          lineEnding: '\n',
+          linePrefix: '> ',
+          titleRanges: [{ from: 14, to: 19 }],
+          underlineMarkerRange: { from: 22, to: 27 }
+        }
+      ]
+    ] as const
+  )('describes physical Setext syntax with %s', (_name, source, syntax) => {
+    expect(parseMarkdownStructure(source).headings[0]?.syntax).toEqual(syntax);
+  });
+
   it('recognizes every ATX heading level', () => {
     const source = '# H1\n## H2\n### H3\n#### H4\n##### H5\n###### H6\n';
     expect(

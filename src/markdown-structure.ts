@@ -23,9 +23,25 @@ export interface MarkdownHeading {
   readonly container: MarkdownContainer;
   readonly level: HeadingLevel;
   readonly lineStart: number;
+  readonly syntax: MarkdownHeadingSyntax;
   readonly syntaxEnd: number;
   readonly syntaxStart: number;
 }
+
+export type MarkdownHeadingSyntax =
+  // eslint-disable-next-line no-restricted-syntax -- The approved parser API uses a compact discriminated union.
+  | {
+    readonly kind: 'atx';
+    readonly openingMarkerRange: MarkdownRange;
+  }
+  // eslint-disable-next-line no-restricted-syntax -- The approved parser API uses a compact discriminated union.
+  | {
+    readonly kind: 'setext';
+    readonly lineEnding: '' | '\n' | '\r\n';
+    readonly linePrefix: string;
+    readonly titleRanges: readonly MarkdownRange[];
+    readonly underlineMarkerRange: MarkdownRange;
+  };
 
 export interface MarkdownRange {
   readonly from: number;
@@ -59,6 +75,7 @@ const HEADING_LEVEL_BY_NODE: Readonly<Record<string, HeadingLevel>> = {
 /* eslint-enable no-magic-numbers -- Re-enable the rule outside the specification-defined mapping. */
 
 const BLOCK_IGNORED_NODE_NAMES = new Set(['Comment', 'CommentBlock']);
+const CRLF_LENGTH = 2;
 const DELIMITER_IGNORED_NODE_NAMES = new Set([
   'CodeBlock',
   'Comment',
@@ -66,7 +83,9 @@ const DELIMITER_IGNORED_NODE_NAMES = new Set([
   'FencedCode',
   'InlineCode'
 ]);
+const MAX_MARKDOWN_INDENTATION_SPACES = 3;
 const PERCENT_COMMENT_DELIMITER = '%%';
+const SETEXT_HEADING_LEVEL_ONE: HeadingLevel = 1;
 
 export function parseMarkdownStructure(source: string): MarkdownStructure {
   const root: MarkdownContainer = {
@@ -113,11 +132,14 @@ export function parseMarkdownStructure(source: string): MarkdownStructure {
 
       const level = HEADING_LEVEL_BY_NODE[node.name];
       if (level !== undefined) {
+        const lineStart = getHeadingLineStart(source, node);
+        const syntaxEnd = getHeadingSyntaxEnd(source, node.to);
         headings.push({
           container: containerStack.at(-1) ?? root,
           level,
-          lineStart: getHeadingLineStart(source, node),
-          syntaxEnd: getHeadingSyntaxEnd(source, node.to),
+          lineStart,
+          syntax: getHeadingSyntax(source, node, level, lineStart, syntaxEnd),
+          syntaxEnd,
           syntaxStart: node.from
         });
       }
@@ -247,8 +269,61 @@ function findPercentCommentRanges(
   return ranges;
 }
 
+function findSetextUnderlineMarkerRange(
+  source: string,
+  lineStart: number,
+  lineEnd: number,
+  markerCharacter: '-' | '='
+): MarkdownRange {
+  let from = lineStart;
+  while (from < lineEnd && source[from] !== markerCharacter) {
+    from += 1;
+  }
+  let to = from;
+  while (to < lineEnd && source[to] === markerCharacter) {
+    to += 1;
+  }
+  return { from, to };
+}
+
 function getHeadingLineStart(source: string, node: MarkdownNode): number {
   return getLineStart(source, node.from);
+}
+
+function getHeadingSyntax(
+  source: string,
+  node: MarkdownNode,
+  level: HeadingLevel,
+  lineStart: number,
+  syntaxEnd: number
+): MarkdownHeadingSyntax {
+  if (node.name.startsWith('ATXHeading')) {
+    return {
+      kind: 'atx',
+      openingMarkerRange: { from: node.from, to: node.from + level }
+    };
+  }
+
+  const underlineLineStart = getLineStart(source, syntaxEnd);
+  const markerCharacter = level === SETEXT_HEADING_LEVEL_ONE ? '=' : '-';
+  const underlineMarkerRange = findSetextUnderlineMarkerRange(
+    source,
+    underlineLineStart,
+    syntaxEnd,
+    markerCharacter
+  );
+  return {
+    kind: 'setext',
+    lineEnding: getLineEndingAt(source, syntaxEnd),
+    linePrefix: source.slice(lineStart, node.from),
+    titleRanges: getSetextTitleRanges(
+      source,
+      lineStart,
+      node.from,
+      underlineLineStart
+    ),
+    underlineMarkerRange
+  };
 }
 
 function getHeadingSyntaxEnd(source: string, nodeEnd: number): number {
@@ -257,13 +332,81 @@ function getHeadingSyntaxEnd(source: string, nodeEnd: number): number {
     : nodeEnd;
 }
 
+function getLineContentEnd(source: string, lineStart: number): number {
+  const newline = source.indexOf('\n', lineStart);
+  const lineEnd = newline === -1 ? source.length : newline;
+  return source[lineEnd - 1] === '\r' ? lineEnd - 1 : lineEnd;
+}
+
 function getLineEndIncludingBreak(source: string, offset: number): number {
   const newline = source.indexOf('\n', offset);
   return newline === -1 ? source.length : newline + 1;
 }
 
+function getLineEndingAt(
+  source: string,
+  lineEnd: number
+): '' | '\n' | '\r\n' {
+  if (source.slice(lineEnd, lineEnd + CRLF_LENGTH) === '\r\n') {
+    return '\r\n';
+  }
+  return source[lineEnd] === '\n' ? '\n' : '';
+}
+
 function getLineStart(source: string, offset: number): number {
   return source.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+}
+
+function getSetextTitleRanges(
+  source: string,
+  firstLineStart: number,
+  firstTitleStart: number,
+  underlineLineStart: number
+): MarkdownRange[] {
+  const ranges: MarkdownRange[] = [];
+  let lineStart = firstLineStart;
+  while (lineStart < underlineLineStart) {
+    const lineEnd = getLineContentEnd(source, lineStart);
+    ranges.push({
+      from: lineStart === firstLineStart
+        ? firstTitleStart
+        : getSetextTitleStart(source, lineStart, lineEnd),
+      to: lineEnd
+    });
+    const newline = source.indexOf('\n', lineStart);
+    if (newline === -1) {
+      break;
+    }
+    lineStart = newline + 1;
+  }
+  return ranges;
+}
+
+function getSetextTitleStart(
+  source: string,
+  lineStart: number,
+  lineEnd: number
+): number {
+  let offset = lineStart;
+  while (offset < lineEnd) {
+    let indentation = 0;
+    while (
+      indentation < MAX_MARKDOWN_INDENTATION_SPACES
+      && offset < lineEnd
+      && source[offset] === ' '
+    ) {
+      indentation += 1;
+      offset += 1;
+    }
+    if (source[offset] !== '>') {
+      return offset;
+    }
+    offset += 1;
+    if (source[offset] === ' ' || source[offset] === '\t') {
+      offset += 1;
+    }
+  }
+  return offset;
 }
 
 function isCallout(source: string, node: MarkdownNode): boolean {
