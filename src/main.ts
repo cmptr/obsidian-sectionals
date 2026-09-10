@@ -566,9 +566,9 @@ function isStructuralActionAvailable(
   action: StructuralAction,
   planningContextProvider: StructuralPlanningContextProvider
 ): boolean {
+  const source = editor.getValue();
+  const cursorOffset = editor.posToOffset(editor.getCursor('head'));
   try {
-    const source = editor.getValue();
-    const cursorOffset = editor.posToOffset(editor.getCursor('head'));
     const context = planningContextProvider(editor, source);
     return planStructuralActionWithContext(context, cursorOffset, action)
       !== null;

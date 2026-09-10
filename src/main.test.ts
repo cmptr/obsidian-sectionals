@@ -58,6 +58,11 @@ vi.mock('./section-extraction-planner.ts', async (importOriginal) => {
   };
 });
 
+interface EditorFailureCase {
+  readonly method: string;
+  throwFrom(editor: SectionEditor, failure: Error): void;
+}
+
 interface EditorFixture {
   editor: SectionEditor;
   replaceRange: ReturnType<typeof vi.fn>;
@@ -913,6 +918,72 @@ describe('SectionalsPlugin', () => {
         name: 'Extract current section to new note'
       }
     ]);
+  });
+
+  it('preserves editor and planning failure boundaries in registered structural checks', () => {
+    const source = '## One\none\n## Two\ntwo\n';
+    const planningFailure = new Error('planning failed');
+    const planningContextProvider = vi.fn(() => {
+      throw planningFailure;
+    });
+    const commands = getRegisteredCommands(
+      loadPluginCommands(undefined, undefined, planningContextProvider)
+    );
+    const callback = commands.get('move-current-section-up')
+      ?.editorCheckCallback;
+    if (callback === undefined) {
+      throw new TypeError('Expected the movement check callback.');
+    }
+    const editorFailureCases: readonly EditorFailureCase[] = [
+      {
+        method: 'getValue',
+        throwFrom(editor, failure): void {
+          vi.mocked(editor.getValue).mockImplementationOnce(() => {
+            throw failure;
+          });
+        }
+      },
+      {
+        method: 'getCursor',
+        throwFrom(editor, failure): void {
+          vi.mocked(editor.getCursor).mockImplementationOnce(() => {
+            throw failure;
+          });
+        }
+      },
+      {
+        method: 'posToOffset',
+        throwFrom(editor, failure): void {
+          vi.mocked(editor.posToOffset).mockImplementationOnce(() => {
+            throw failure;
+          });
+        }
+      }
+    ];
+
+    for (const { method, throwFrom } of editorFailureCases) {
+      const fixture = createEditor(source, source.indexOf('two'));
+      const failure = new Error(`${method} failed`);
+      throwFrom(fixture.editor, failure);
+
+      expect(() => {
+        callback(
+          true,
+          fixture.editor as Editor,
+          {} as PublicMarkdownView
+        );
+      }).toThrow(failure);
+    }
+    expect(planningContextProvider).not.toHaveBeenCalled();
+
+    const fixture = createEditor(source, source.indexOf('two'));
+    expect(
+      callback(true, fixture.editor as Editor, {} as PublicMarkdownView)
+    ).toBe(false);
+    expect(planningContextProvider).toHaveBeenCalledExactlyOnceWith(
+      fixture.editor,
+      source
+    );
   });
 
   it('shares one context across synchronous checks and expires it after the microtask', async () => {
