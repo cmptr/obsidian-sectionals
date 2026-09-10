@@ -2,7 +2,7 @@
   "name": "sectionals",
   "version": "0.2.1",
   "private": true,
-  "description": "Delete the Markdown section containing the cursor.",
+  "description": "Edit complete Markdown structures at the cursor without selecting exact lines.",
   "author": "Aaron Bell",
   "license": "MIT",
   "type": "module",

@@ -4,6 +4,8 @@
 
 - Add commands to promote or demote complete section hierarchies and repeat those changes.
 - Keep created extraction notes when a concurrent change makes automatic cleanup unsafe.
+- Harden CI and release publication with least-privilege jobs, pinned actions, production dependency audits, and verified release artifact hashes.
+- Add automated compatibility checks against Obsidian 1.8.7 declarations and ES2020 output.
 
 ## 0.2.1
 

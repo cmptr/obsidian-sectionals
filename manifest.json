@@ -3,7 +3,7 @@
   "name": "Sectionals",
   "version": "0.2.1",
   "minAppVersion": "1.8.9",
-  "description": "Delete the Markdown section containing the cursor.",
+  "description": "Edit complete Markdown structures at the cursor without selecting exact lines.",
   "author": "Aaron Bell",
   "isDesktopOnly": false
 }

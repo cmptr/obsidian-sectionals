@@ -124,6 +124,51 @@ describe('assertReleaseBranch', () => {
   });
 });
 
+describe('release metadata', () => {
+  it('keeps plugin metadata synchronized with the supported release history', () => {
+    const manifest = JSON.parse(readFileSync('manifest.json', 'utf-8')) as Record<string, unknown>;
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf-8')) as Record<string, unknown>;
+    const versions = JSON.parse(readFileSync('versions.json', 'utf-8')) as Record<string, unknown>;
+
+    expect(packageJson['description']).toBe(manifest['description']);
+    expect({
+      manifest: {
+        description: manifest['description'],
+        id: manifest['id'],
+        minAppVersion: manifest['minAppVersion'],
+        name: manifest['name'],
+        version: manifest['version']
+      },
+      package: {
+        description: packageJson['description'],
+        name: packageJson['name'],
+        version: packageJson['version']
+      },
+      versions
+    }).toEqual({
+      manifest: {
+        description: 'Edit complete Markdown structures at the cursor without selecting exact lines.',
+        id: 'sectionals',
+        minAppVersion: '1.8.9',
+        name: 'Sectionals',
+        version: '0.2.1'
+      },
+      package: {
+        description: 'Edit complete Markdown structures at the cursor without selecting exact lines.',
+        name: 'sectionals',
+        version: '0.2.1'
+      },
+      versions: {
+        '0.1.0': '1.8.9',
+        '0.1.1': '1.8.9',
+        '0.1.2': '1.8.9',
+        '0.2.0': '1.8.9',
+        '0.2.1': '1.8.9'
+      }
+    });
+  });
+});
+
 describe('build output', () => {
   it('places the plugin entry point where build verification can discover it', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf-8')) as Record<string, unknown>;
@@ -135,9 +180,11 @@ describe('build output', () => {
 });
 
 describe('release Make targets', () => {
-  it('builds release assets without creating a ZIP archive', () => {
+  it('builds only the named release assets without creating a ZIP archive', () => {
     const output = execFileSync('make', ['--no-print-directory', '--dry-run', 'release'], { encoding: 'utf-8' });
+    const assetLines = output.split('\n').filter((line) => line.startsWith('echo "Release assets:'));
 
+    expect(assetLines).toEqual(['echo "Release assets: dist/main.js dist/manifest.json"']);
     expect(output).not.toContain('zipfile');
     expect(output).not.toContain('verify-archive');
   });
