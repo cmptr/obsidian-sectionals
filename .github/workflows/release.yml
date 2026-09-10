@@ -59,8 +59,10 @@ jobs:
         run: |
           test -f dist/main.js
           test -f dist/manifest.json
-          main_sha256="$(sha256sum dist/main.js | cut -d ' ' -f 1)"
-          manifest_sha256="$(sha256sum dist/manifest.json | cut -d ' ' -f 1)"
+          main_sha256sum="$(sha256sum dist/main.js)"
+          manifest_sha256sum="$(sha256sum dist/manifest.json)"
+          main_sha256="${main_sha256sum%% *}"
+          manifest_sha256="${manifest_sha256sum%% *}"
           [[ "$main_sha256" =~ ^[[:xdigit:]]{64}$ ]]
           [[ "$manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]
           printf 'main=%s\n' "$main_sha256" >> "$GITHUB_OUTPUT"
@@ -101,8 +103,10 @@ jobs:
           test -f dist/manifest.json
           [[ "$EXPECTED_MAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
           [[ "$EXPECTED_MANIFEST_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
-          actual_main_sha256="$(sha256sum dist/main.js | cut -d ' ' -f 1)"
-          actual_manifest_sha256="$(sha256sum dist/manifest.json | cut -d ' ' -f 1)"
+          main_sha256sum="$(sha256sum dist/main.js)"
+          manifest_sha256sum="$(sha256sum dist/manifest.json)"
+          actual_main_sha256="${main_sha256sum%% *}"
+          actual_manifest_sha256="${manifest_sha256sum%% *}"
           [[ "$actual_main_sha256" =~ ^[[:xdigit:]]{64}$ ]]
           [[ "$actual_manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]
           test "$actual_main_sha256" = "$EXPECTED_MAIN_SHA256"

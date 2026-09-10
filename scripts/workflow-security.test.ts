@@ -27,6 +27,7 @@ const MATCHING_SHA256SUM = [
   'esac',
   String.raw`printf '%s  %s\n' "$digest" "$1"`
 ].join('\n');
+const FAILING_AFTER_VALID_SHA256SUM = `${MATCHING_SHA256SUM}\nexit 73`;
 const RELEASE_COMMANDS = [
   /\bgit\s+(?:push|tag)\b/iu,
   /\bgh\s+release\b/iu,
@@ -116,8 +117,10 @@ jobs:
         run: |
           test -f dist/main.js
           test -f dist/manifest.json
-          main_sha256="$(sha256sum dist/main.js | cut -d ' ' -f 1)"
-          manifest_sha256="$(sha256sum dist/manifest.json | cut -d ' ' -f 1)"
+          main_sha256sum="$(sha256sum dist/main.js)"
+          manifest_sha256sum="$(sha256sum dist/manifest.json)"
+          main_sha256="\${main_sha256sum%% *}"
+          manifest_sha256="\${manifest_sha256sum%% *}"
           [[ "$main_sha256" =~ ^[[:xdigit:]]{64}$ ]]
           [[ "$manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]
           printf 'main=%s\\n' "$main_sha256" >> "$GITHUB_OUTPUT"
@@ -155,8 +158,10 @@ jobs:
           test -f dist/manifest.json
           [[ "$EXPECTED_MAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
           [[ "$EXPECTED_MANIFEST_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
-          actual_main_sha256="$(sha256sum dist/main.js | cut -d ' ' -f 1)"
-          actual_manifest_sha256="$(sha256sum dist/manifest.json | cut -d ' ' -f 1)"
+          main_sha256sum="$(sha256sum dist/main.js)"
+          manifest_sha256sum="$(sha256sum dist/manifest.json)"
+          actual_main_sha256="\${main_sha256sum%% *}"
+          actual_manifest_sha256="\${manifest_sha256sum%% *}"
           [[ "$actual_main_sha256" =~ ^[[:xdigit:]]{64}$ ]]
           [[ "$actual_manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]
           test "$actual_main_sha256" = "$EXPECTED_MAIN_SHA256"
@@ -363,7 +368,7 @@ function runWorkflowShell(script: string, options: ShellFixtureOptions = {}): Sh
       path = `${bin}:${path}`;
     }
 
-    const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script], {
+    const result = spawnSync('bash', ['-e', '-c', script], {
       cwd: root,
       encoding: 'utf-8',
       env: {
@@ -487,17 +492,13 @@ describe('release workflow privilege boundary', () => {
     }).toThrow();
   });
 
-  it('rejects hashing nested inside successful output commands', () => {
+  it('rejects hashing nested inside a successful command substitution', () => {
+    const stepStart = '        id: hashes\n        run: |\n'
+      + '          test -f dist/main.js\n          test -f dist/manifest.json\n';
     const mutated = replaceExactlyOnce(
       EXPECTED_RELEASE_WORKFLOW_SOURCE,
-      '          main_sha256="$(sha256sum dist/main.js | cut -d \' \' -f 1)"\n'
-        + '          manifest_sha256="$(sha256sum dist/manifest.json | cut -d \' \' -f 1)"\n'
-        + '          [[ "$main_sha256" =~ ^[[:xdigit:]]{64}$ ]]\n'
-        + '          [[ "$manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]\n'
-        + '          printf \'main=%s\\n\' "$main_sha256" >> "$GITHUB_OUTPUT"\n'
-        + '          printf \'manifest=%s\\n\' "$manifest_sha256" >> "$GITHUB_OUTPUT"\n',
-      '          printf \'main=%s\\n\' "$(sha256sum dist/main.js | cut -d \' \' -f 1)" >> "$GITHUB_OUTPUT"\n'
-        + '          printf \'manifest=%s\\n\' "$(sha256sum dist/manifest.json | cut -d \' \' -f 1)" >> "$GITHUB_OUTPUT"\n'
+      `${stepStart}          main_sha256sum="$(sha256sum dist/main.js)"\n`,
+      `${stepStart}          main_sha256sum="$(printf '%s' "$(sha256sum dist/main.js | cut -d ' ' -f 1)")"\n`
     );
 
     expect(() => {
@@ -547,6 +548,25 @@ describe('release workflow hash behavior', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.githubOutput).toBe('');
+  });
+
+  it('propagates a build hash failure after valid digest output', () => {
+    const script = getStepRun(releaseWorkflow, 'build', 'Calculate release asset hashes');
+    const result = runWorkflowShell(script, { sha256sum: FAILING_AFTER_VALID_SHA256SUM });
+
+    expect(result.status).not.toBe(0);
+    expect(result.githubOutput).toBe('');
+  });
+
+  it('propagates a publish hash failure after valid digest output', () => {
+    const script = getStepRun(releaseWorkflow, 'publish', 'Verify release asset hashes');
+    const result = runWorkflowShell(script, {
+      expectedMain: VALID_MAIN_DIGEST,
+      expectedManifest: VALID_MANIFEST_DIGEST,
+      sha256sum: FAILING_AFTER_VALID_SHA256SUM
+    });
+
+    expect(result.status).not.toBe(0);
   });
 
   it('rejects a directory before build hashing', () => {
