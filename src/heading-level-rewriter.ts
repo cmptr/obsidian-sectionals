@@ -181,19 +181,17 @@ function createSetextToAtxRewrite(
   }
   appendCopiedSpan(physicalSyntax.finalLineEndingRange);
 
-  const replacementEnd = physicalSyntax.range.from + replacement.length;
   return {
-    mapOffset: createBoundedOffsetMap(physicalSyntax.range, (offset) => {
-      const copiedSpan = copiedSpans.find(
-        ({ sourceRange }) => sourceRange.from <= offset && offset < sourceRange.to
-      );
-      return copiedSpan === undefined
-        ? replacementEnd
-        : physicalSyntax.range.from
-          + copiedSpan.replacementFrom
-          + offset
-          - copiedSpan.sourceRange.from;
-    }),
+    mapOffset: createBoundedOffsetMap(
+      physicalSyntax.range,
+      (offset) =>
+        mapSetextToAtxOffset(
+          offset,
+          physicalSyntax.range,
+          replacement.length,
+          copiedSpans
+        )
+    ),
     range: physicalSyntax.range,
     replacement
   };
@@ -213,15 +211,21 @@ function getTrimmedRange(
   source: string,
   range: MarkdownRange
 ): MarkdownRange | null {
-  const value = source.slice(range.from, range.to);
-  const trimmed = value.trim();
-  if (trimmed === '') {
-    return null;
+  let from = range.from;
+  while (from < range.to && isAsciiMarkdownPadding(source[from])) {
+    from += 1;
   }
-  return {
-    from: range.from + value.length - value.trimStart().length,
-    to: range.from + value.trimEnd().length
-  };
+
+  let to = range.to;
+  while (to > from && isAsciiMarkdownPadding(source[to - 1])) {
+    to -= 1;
+  }
+
+  return from === to ? null : { from, to };
+}
+
+function isAsciiMarkdownPadding(character: string | undefined): boolean {
+  return character === ' ' || character === '\t';
 }
 
 function isRangeWithinSource(range: MarkdownRange, sourceLength: number): boolean {
@@ -230,6 +234,56 @@ function isRangeWithinSource(range: MarkdownRange, sourceLength: number): boolea
     && range.from >= 0
     && range.from <= range.to
     && range.to <= sourceLength;
+}
+
+function mapRemovedOffsetToNearestBoundary(
+  offset: number,
+  previousSourceBoundary: number,
+  previousReplacementBoundary: number,
+  nextSourceBoundary: number,
+  nextReplacementBoundary: number
+): number {
+  return offset - previousSourceBoundary <= nextSourceBoundary - offset
+    ? previousReplacementBoundary
+    : nextReplacementBoundary;
+}
+
+function mapSetextToAtxOffset(
+  offset: number,
+  physicalRange: MarkdownRange,
+  replacementLength: number,
+  copiedSpans: readonly CopiedSpan[]
+): number {
+  let previousSourceBoundary = physicalRange.from;
+  let previousReplacementBoundary = physicalRange.from;
+
+  for (const copiedSpan of copiedSpans) {
+    const replacementFrom = physicalRange.from + copiedSpan.replacementFrom;
+    if (offset < copiedSpan.sourceRange.from) {
+      return mapRemovedOffsetToNearestBoundary(
+        offset,
+        previousSourceBoundary,
+        previousReplacementBoundary,
+        copiedSpan.sourceRange.from,
+        replacementFrom
+      );
+    }
+    if (offset < copiedSpan.sourceRange.to) {
+      return replacementFrom + offset - copiedSpan.sourceRange.from;
+    }
+    previousSourceBoundary = copiedSpan.sourceRange.to;
+    previousReplacementBoundary = replacementFrom
+      + copiedSpan.sourceRange.to
+      - copiedSpan.sourceRange.from;
+  }
+
+  return mapRemovedOffsetToNearestBoundary(
+    offset,
+    previousSourceBoundary,
+    previousReplacementBoundary,
+    physicalRange.to,
+    physicalRange.from + replacementLength
+  );
 }
 
 function throwHeadingSourceTypeError(): never {

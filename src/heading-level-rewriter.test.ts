@@ -14,6 +14,19 @@ function applyRewrite(source: string, rewrite: HeadingLevelRewrite): string {
     + source.slice(rewrite.range.to);
 }
 
+function expectOffsetMapToBeMonotonic(rewrite: HeadingLevelRewrite): void {
+  let previous = rewrite.mapOffset(rewrite.range.from);
+  for (
+    let offset = rewrite.range.from + 1;
+    offset <= rewrite.range.to;
+    offset += 1
+  ) {
+    const current = rewrite.mapOffset(offset);
+    expect(current).toBeGreaterThanOrEqual(previous);
+    previous = current;
+  }
+}
+
 function getOnlyHeading(source: string): MarkdownHeading {
   const [heading, unexpectedHeading] = parseMarkdownStructure(source).headings;
   if (heading === undefined || unexpectedHeading !== undefined) {
@@ -195,6 +208,34 @@ describe('planHeadingLevelRewrite', () => {
       expect(applyRewrite(source, rewrite)).toBe(expected);
     });
 
+    it.each(
+      [
+        [
+          'non-breaking spaces',
+          '\u{A0}Title\u{A0}\n-----\n',
+          '### \u{A0}Title\u{A0}\n'
+        ],
+        [
+          'other Unicode whitespace at both boundaries',
+          '\u{2003}Title\u{202F} \t\n-----\n',
+          '### \u{2003}Title\u{202F}\n'
+        ]
+      ] as const
+    )('preserves %s as title content', (_name, source, expected) => {
+      const heading = getOnlyHeading(source);
+      const rewrite = planHeadingLevelRewrite(source, heading, 3);
+
+      expect(applyRewrite(source, rewrite)).toBe(expected);
+    });
+
+    it('maps Unicode title-boundary characters as retained content', () => {
+      const source = '\u{A0}Title\u{2003}\n-----\n';
+      const heading = getOnlyHeading(source);
+      const rewrite = planHeadingLevelRewrite(source, heading, 3);
+
+      expect([rewrite.mapOffset(0), rewrite.mapOffset(6)]).toEqual([4, 10]);
+    });
+
     it('owns only the underline marker for Setext level one-to-two changes', () => {
       const source = 'before\n\n> Title\r\n> -----  \r\nafter';
       const heading = getOnlyHeading(source);
@@ -225,7 +266,7 @@ describe('planHeadingLevelRewrite', () => {
       expect(() => rewrite.mapOffset(29)).toThrow(RangeError);
     });
 
-    it('maps retained title and final line-ending bytes through multiline conversion', () => {
+    it('maps retained bytes and removed gaps to stable replacement boundaries', () => {
       const source = 'before\n\n>   First  \r\n> second \t\r\n> -----  \r\nafter';
       const heading = getOnlyHeading(source);
       const rewrite = planHeadingLevelRewrite(source, heading, 3);
@@ -269,7 +310,24 @@ describe('planHeadingLevelRewrite', () => {
         rewrite.mapOffset(39),
         rewrite.mapOffset(40),
         rewrite.mapOffset(41)
-      ]).toEqual(Array.from({ length: 16 }, () => replacementEnd));
+      ]).toEqual([
+        21,
+        21,
+        21,
+        21,
+        22,
+        22,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28,
+        28
+      ]);
       for (let offset = rewrite.range.from; offset <= rewrite.range.to; offset += 1) {
         expect(rewrite.mapOffset(offset)).toBeGreaterThanOrEqual(rewrite.range.from);
         expect(rewrite.mapOffset(offset)).toBeLessThanOrEqual(replacementEnd);
@@ -277,6 +335,38 @@ describe('planHeadingLevelRewrite', () => {
       expect(() => rewrite.mapOffset(7)).toThrow(RangeError);
       expect(() => rewrite.mapOffset(45)).toThrow(RangeError);
     });
+
+    it.each(
+      [
+        [
+          'root LF heading',
+          'before\n\nFirst  \nsecond\n-----  \nafter\n',
+          3
+        ],
+        [
+          'quoted CRLF heading',
+          'before\r\n\r\n>   First  \r\n> second \t\r\n> -----  \r\nafter\r\n',
+          4
+        ],
+        [
+          'nested quote heading at EOF',
+          'before\n\n> > First\n> > second  \n> > -----',
+          6
+        ]
+      ] as const
+    )(
+      'maps every accepted source offset monotonically through a multiline %s',
+      (_name, source, targetLevel) => {
+        const heading = getOnlyHeading(source);
+        const rewrite = planHeadingLevelRewrite(
+          source,
+          heading,
+          targetLevel
+        );
+
+        expectOffsetMapToBeMonotonic(rewrite);
+      }
+    );
   });
 
   it.each([0, 7, 1.5, NaN, Infinity])(
