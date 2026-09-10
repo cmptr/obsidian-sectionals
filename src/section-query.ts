@@ -34,6 +34,17 @@ export function collectMarkdownSections(
   });
 }
 
+export function findHeadingsInSection(
+  structure: MarkdownStructure,
+  section: MarkdownSection
+): readonly MarkdownHeading[] {
+  return structure.headings.filter((heading) =>
+    heading.container.id === section.heading.container.id
+    && section.range.from <= heading.lineStart
+    && heading.lineStart < section.range.to
+  );
+}
+
 export function findMarkdownSection(
   sourceLength: number,
   sections: readonly MarkdownSection[],
@@ -64,6 +75,15 @@ export function findMarkdownSection(
     }
   }
   return target;
+}
+
+export function findPreviousSiblingSection(
+  sections: readonly MarkdownSection[],
+  target: MarkdownSection
+): MarkdownSection | null {
+  const siblings = findSiblingSections(sections, target);
+  const index = siblings.indexOf(target);
+  return index > 0 ? siblings[index - 1] ?? null : null;
 }
 
 export function findSiblingSections(

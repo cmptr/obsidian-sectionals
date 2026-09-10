@@ -4,14 +4,149 @@ import { describe, expect, it } from 'vitest';
 import type { MarkdownSection } from './section-query.ts';
 
 import { parseMarkdownStructure } from './markdown-structure.ts';
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible query imports compact.
-import { collectMarkdownSections, findMarkdownSection, findSiblingSections } from './section-query.ts';
+import {
+  collectMarkdownSections,
+  findHeadingsInSection,
+  findMarkdownSection,
+  findPreviousSiblingSection,
+  findSiblingSections
+} from './section-query.ts';
 
 function headingText(source: string, section: MarkdownSection): string {
   return source.slice(section.heading.lineStart, section.heading.syntaxEnd);
 }
 
 describe('section queries', () => {
+  it.each([
+    {
+      alphaHeading: '## Alpha',
+      betaHeading: '## Beta',
+      name: 'the root container',
+      source: '# Root\n## Alpha\n##### Deep\n## Beta\nBody\n'
+    },
+    {
+      alphaHeading: '> > ## Alpha',
+      betaHeading: '> > ## Beta',
+      name: 'the deepest nested quote container',
+      source: [
+        '> Outer',
+        '> > # Root',
+        '> > ## Alpha',
+        '> > ##### Deep',
+        '> > ## Beta',
+        '> > Body',
+        ''
+      ].join('\n')
+    },
+    {
+      alphaHeading: '> ## Alpha',
+      betaHeading: '> ## Beta',
+      name: 'a callout container',
+      source: [
+        '> [!note] Sections',
+        '> # Root',
+        '> ## Alpha',
+        '> ##### Deep',
+        '> ## Beta',
+        '> Body',
+        ''
+      ].join('\n')
+    }
+  ])('returns the target subtree and previous exact sibling in $name', ({
+    alphaHeading,
+    betaHeading,
+    source
+  }) => {
+    const structure = parseMarkdownStructure(source);
+    const sections = collectMarkdownSections(structure);
+    const alpha = sections.find((section) => section.heading.lineStart === source.indexOf(alphaHeading));
+    const beta = sections.find((section) => section.heading.lineStart === source.indexOf(betaHeading));
+
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    if (alpha === undefined || beta === undefined) {
+      throw new Error('expected hierarchy fixture headings');
+    }
+    expect(
+      findHeadingsInSection(structure, alpha).map((heading) => heading.level)
+    ).toEqual([2, 5]);
+    expect(findPreviousSiblingSection(sections, beta)).toBe(alpha);
+  });
+
+  it('keeps subtree headings in source order and excludes quoted containers', () => {
+    const source = [
+      '# Root',
+      '## Alpha',
+      '> ### Nested quote',
+      '> > #### Deeper quote',
+      '',
+      '> ### Different quote',
+      '> body',
+      '##### Deep',
+      '## Beta',
+      ''
+    ].join('\n');
+    const structure = parseMarkdownStructure(source);
+    const sections = collectMarkdownSections(structure);
+    const alpha = sections.find((section) => section.heading.lineStart === source.indexOf('## Alpha'));
+
+    expect(alpha).toBeDefined();
+    if (alpha === undefined) {
+      throw new Error('expected Alpha fixture heading');
+    }
+    expect(
+      findHeadingsInSection(structure, alpha).map((heading) => source.slice(heading.lineStart, heading.syntaxEnd))
+    ).toEqual(['## Alpha', '##### Deep']);
+  });
+
+  it.each([
+    {
+      name: 'the first sibling',
+      source: '# Root\n## Target\n## Later\n',
+      targetHeading: '## Target'
+    },
+    {
+      name: 'a preceding heading at a different level',
+      source: '# Root\n### Before\n## Target\n',
+      targetHeading: '## Target'
+    },
+    {
+      name: 'a preceding heading under a different parent',
+      source: [
+        '# Root',
+        '## First parent',
+        '### Before',
+        '## Second parent',
+        '### Target',
+        ''
+      ].join('\n'),
+      targetHeading: '### Target'
+    },
+    {
+      name: 'a preceding heading in a different quote container',
+      source: [
+        '> ## Before',
+        '> body',
+        '',
+        'outside',
+        '',
+        '> ## Target',
+        '> body',
+        ''
+      ].join('\n'),
+      targetHeading: '> ## Target'
+    }
+  ])('returns null for $name', ({ source, targetHeading }) => {
+    const sections = collectMarkdownSections(parseMarkdownStructure(source));
+    const target = sections.find((section) => section.heading.lineStart === source.indexOf(targetHeading));
+
+    expect(target).toBeDefined();
+    if (target === undefined) {
+      throw new Error('expected target fixture heading');
+    }
+    expect(findPreviousSiblingSection(sections, target)).toBeNull();
+  });
+
   it('collects ranges, parents, and same-level siblings', () => {
     const source = [
       '# Root',
