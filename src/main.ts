@@ -28,7 +28,7 @@ import {
   ExtractionSourceChangedError
 } from './section-extraction-executor.ts';
 import { planSectionExtraction } from './section-extraction-planner.ts';
-import { planSectionMovement } from './section-movement-planner.ts';
+import { planStructuralAction } from './structural-action-planner.ts';
 
 export const NO_TARGET_NOTICE = 'No containing heading found.';
 export const PARSE_FAILURE_NOTICE = 'Unable to determine the section to delete.';
@@ -153,6 +153,19 @@ const MOVEMENT_COMMANDS = [
   }
 ] as const;
 
+const HIERARCHY_COMMANDS = [
+  {
+    id: 'promote-current-section',
+    mode: 'promote',
+    name: 'Promote current section'
+  },
+  {
+    id: 'demote-current-section',
+    mode: 'demote',
+    name: 'Demote current section'
+  }
+] as const;
+
 const CONTEXTUAL_COMMANDS: readonly ContextualDeleteCommand[] = [
   {
     id: 'delete-current-fenced-code-block',
@@ -227,6 +240,27 @@ export default class SectionalsPlugin extends Plugin {
         editorCheckCallback: (isChecking, editor) => {
           const action: StructuralAction = {
             kind: 'move-section',
+            mode: command.mode
+          };
+          return checkAndExecuteStructuralAction(
+            isChecking,
+            editor,
+            action,
+            (successfulAction) => {
+              this.lastStructuralAction = successfulAction;
+            }
+          );
+        },
+        id: command.id,
+        name: command.name
+      });
+    }
+
+    for (const command of HIERARCHY_COMMANDS) {
+      this.addCommand({
+        editorCheckCallback: (isChecking, editor) => {
+          const action: StructuralAction = {
+            kind: 'change-section-hierarchy',
             mode: command.mode
           };
           return checkAndExecuteStructuralAction(
@@ -556,7 +590,7 @@ export function checkAndExecuteStructuralAction(
   editor: SectionEditor,
   action: StructuralAction,
   remember: (action: StructuralAction) => void,
-  planner: StructuralActionPlanner = planSectionMovement
+  planner: StructuralActionPlanner = planStructuralAction
 ): boolean {
   const source = editor.getValue();
   const cursorOffset = editor.posToOffset(editor.getCursor('head'));

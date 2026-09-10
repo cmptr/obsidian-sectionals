@@ -756,7 +756,7 @@ describe('SectionalsPlugin', () => {
   it('registers exact editor-only command metadata without hotkeys', () => {
     const { addCommand } = loadPluginCommands();
 
-    expect(addCommand).toHaveBeenCalledTimes(13);
+    expect(addCommand).toHaveBeenCalledTimes(15);
     expect(
       addCommand.mock.calls.map(([command]) => ({
         callback: command.callback,
@@ -846,6 +846,22 @@ describe('SectionalsPlugin', () => {
         hotkeys: undefined,
         id: 'move-current-section-to-end',
         name: 'Move current section to end'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'promote-current-section',
+        name: 'Promote current section'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'demote-current-section',
+        name: 'Demote current section'
       },
       {
         callback: undefined,
@@ -2328,7 +2344,459 @@ describe('SectionalsPlugin', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it('keeps the previous movement as the repeat action after linked and open extraction', async () => {
+  it('checks hierarchy availability without editing or remembering', () => {
+    const commands = getRegisteredCommands(loadPluginCommands());
+    const view = {} as PublicMarkdownView;
+    const promotableSource = '# Root\n## Target\ntarget\n## Later\nlater\n';
+    const promotable = createEditor(
+      promotableSource,
+      promotableSource.indexOf('\ntarget\n') + 1
+    );
+    const unpromotableSource = '# Target\ntarget\n';
+    const unpromotable = createEditor(
+      unpromotableSource,
+      unpromotableSource.indexOf('\ntarget\n') + 1
+    );
+    const demotableSource = '# Root\n## Before\nbefore\n## Target\ntarget\n';
+    const demotable = createEditor(
+      demotableSource,
+      demotableSource.indexOf('\ntarget\n') + 1
+    );
+    const undemotableSource = '# Root\n## Target\ntarget\n## Later\nlater\n';
+    const undemotable = createEditor(
+      undemotableSource,
+      undemotableSource.indexOf('\ntarget\n') + 1
+    );
+
+    expect(
+      commands.get('promote-current-section')?.editorCheckCallback?.(
+        true,
+        promotable.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('promote-current-section')?.editorCheckCallback?.(
+        true,
+        unpromotable.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(
+      commands.get('demote-current-section')?.editorCheckCallback?.(
+        true,
+        demotable.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('demote-current-section')?.editorCheckCallback?.(
+        true,
+        undemotable.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        true,
+        promotable.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    for (
+      const fixture of [
+        promotable,
+        unpromotable,
+        demotable,
+        undemotable
+      ]
+    ) {
+      expect(fixture.replaceRange).not.toHaveBeenCalled();
+      expect(fixture.setCursor).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    {
+      commandId: 'promote-current-section',
+      cursorDelta: -1,
+      replacement: '# Target\ntarget body\n## Child\nchild\n',
+      source: '# Root\n## Target\ntarget body\n### Child\nchild\n## Later\nlater\n',
+      target: 'target body',
+      updated: '# Root\n# Target\ntarget body\n## Child\nchild\n## Later\nlater\n'
+    },
+    {
+      commandId: 'demote-current-section',
+      cursorDelta: 1,
+      replacement: '### Target\ntarget body\n#### Child\nchild\n',
+      source: '# Root\n## Before\nbefore\n## Target\ntarget body\n### Child\nchild\n## Later\nlater\n',
+      target: 'target body',
+      updated: '# Root\n## Before\nbefore\n### Target\ntarget body\n#### Child\nchild\n## Later\nlater\n'
+    }
+  ])(
+    'executes $commandId with one edit before mapping the cursor against updated text',
+    ({ commandId, cursorDelta, replacement, source, target, updated }) => {
+      const commands = getRegisteredCommands(loadPluginCommands());
+      const cursorOffset = source.indexOf(target);
+      const fixture = createEditor(source, cursorOffset);
+
+      expect(
+        commands.get(commandId)?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          {} as PublicMarkdownView
+        )
+      ).toBe(true);
+
+      const rangeFrom = source.indexOf('## Target');
+      const rangeTo = source.indexOf('## Later');
+      expect(fixture.replaceRange).toHaveBeenCalledOnce();
+      expect(fixture.replaceRange).toHaveBeenCalledWith(
+        replacement,
+        { ch: rangeFrom, line: 0 },
+        { ch: rangeTo, line: 0 }
+      );
+      expect(fixture.editor.getValue()).toBe(updated);
+      expect(fixture.editor.offsetToPos).toHaveBeenNthCalledWith(
+        3,
+        cursorOffset + cursorDelta
+      );
+      expect(fixture.setCursor).toHaveBeenCalledWith({
+        ch: cursorOffset + cursorDelta,
+        line: 0
+      });
+      expect(fixture.replaceRange.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(fixture.editor.offsetToPos).mock.invocationCallOrder[2] ?? 0
+      );
+    }
+  );
+
+  it.each([
+    {
+      commandId: 'promote-current-section',
+      firstSource: '# Root\n## Alpha\nalpha\n### Child\nchild\n## Keep\nkeep\n',
+      firstTarget: '\nalpha\n',
+      firstUpdated: '# Root\n# Alpha\nalpha\n## Child\nchild\n## Keep\nkeep\n',
+      secondSource: '# Root\n### One\none\n#### Nested\nnested\n## Keep\nkeep\n',
+      secondTarget: '\none\n',
+      secondUpdated: '# Root\n## One\none\n### Nested\nnested\n## Keep\nkeep\n'
+    },
+    {
+      commandId: 'demote-current-section',
+      firstSource: '# Root\n## Before\nbefore\n## Target\ntarget\n### Child\nchild\n',
+      firstTarget: '\ntarget\n',
+      firstUpdated: '# Root\n## Before\nbefore\n### Target\ntarget\n#### Child\nchild\n',
+      secondSource: '# Root\n## One\none\n## Two\ntwo\n### Nested\nnested\n',
+      secondTarget: '\ntwo\n',
+      secondUpdated: '# Root\n## One\none\n### Two\ntwo\n#### Nested\nnested\n'
+    }
+  ])(
+    'remembers $commandId and repeats it from fresh editor state',
+    ({
+      commandId,
+      firstSource,
+      firstTarget,
+      firstUpdated,
+      secondSource,
+      secondTarget,
+      secondUpdated
+    }) => {
+      const commands = getRegisteredCommands(loadPluginCommands());
+      const first = createEditor(
+        firstSource,
+        firstSource.indexOf(firstTarget) + 1
+      );
+      const second = createEditor(
+        secondSource,
+        secondSource.indexOf(secondTarget) + 1
+      );
+      const view = {} as PublicMarkdownView;
+
+      expect(
+        commands.get(commandId)?.editorCheckCallback?.(
+          false,
+          first.editor as Editor,
+          view
+        )
+      ).toBe(true);
+      expect(first.editor.getValue()).toBe(firstUpdated);
+
+      expect(
+        commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+          false,
+          second.editor as Editor,
+          view
+        )
+      ).toBe(true);
+      expect(second.replaceRange).toHaveBeenCalledOnce();
+      expect(second.editor.getValue()).toBe(secondUpdated);
+    }
+  );
+
+  it('hides an invalid hierarchy repeat without replacing its remembered identity', () => {
+    const commands = getRegisteredCommands(loadPluginCommands());
+    const view = {} as PublicMarkdownView;
+    const rememberedSource = '# Root\n## Target\ntarget\n## Keep\nkeep\n';
+    const remembered = createEditor(
+      rememberedSource,
+      rememberedSource.indexOf('\ntarget\n') + 1
+    );
+    const invalidSource = '# Top\nbody\n';
+    const invalid = createEditor(invalidSource, invalidSource.indexOf('body'));
+    const repeatedSource = '# Root\n## Before\nbefore\n## Target\ntarget\n';
+    const repeated = createEditor(
+      repeatedSource,
+      repeatedSource.indexOf('\ntarget\n') + 1
+    );
+
+    expect(
+      commands.get('promote-current-section')?.editorCheckCallback?.(
+        false,
+        remembered.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        true,
+        invalid.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(invalid.replaceRange).not.toHaveBeenCalled();
+
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeated.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeated.editor.getValue()).toBe(
+      '# Root\n## Before\nbefore\n# Target\ntarget\n'
+    );
+  });
+
+  it('replaces repeat memory by the latest successful action identity', () => {
+    const commands = getRegisteredCommands(loadPluginCommands());
+    const view = {} as PublicMarkdownView;
+    const hierarchySource = '# Root\n## Target\ntarget\n## Keep\nkeep\n';
+    const hierarchy = createEditor(
+      hierarchySource,
+      hierarchySource.indexOf('\ntarget\n') + 1
+    );
+    const movementSource = '## One\none\n## Two\ntwo\n';
+    const movement = createEditor(
+      movementSource,
+      movementSource.indexOf('\none\n') + 1
+    );
+    const repeatedMovementSource = '## Left\nleft\n## Right\nright\n';
+    const repeatedMovement = createEditor(
+      repeatedMovementSource,
+      repeatedMovementSource.indexOf('\nleft\n') + 1
+    );
+    const hierarchyOverrideSource = '## Current\nbody\n';
+    const hierarchyOverride = createEditor(
+      hierarchyOverrideSource,
+      hierarchyOverrideSource.indexOf('body')
+    );
+    const repeatedHierarchySource = '## Alpha\nalpha\n## Beta\nbeta\n';
+    const repeatedHierarchy = createEditor(
+      repeatedHierarchySource,
+      repeatedHierarchySource.indexOf('\nalpha\n') + 1
+    );
+
+    expect(
+      commands.get('promote-current-section')?.editorCheckCallback?.(
+        false,
+        hierarchy.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        movement.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeatedMovement.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeatedMovement.editor.getValue()).toBe(
+      '## Right\nright\n## Left\nleft\n'
+    );
+
+    expect(
+      commands.get('promote-current-section')?.editorCheckCallback?.(
+        false,
+        hierarchyOverride.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeatedHierarchy.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeatedHierarchy.editor.getValue()).toBe(
+      '# Alpha\nalpha\n## Beta\nbeta\n'
+    );
+  });
+
+  it('does not overwrite repeat memory when hierarchy planning fails', () => {
+    const commands = getRegisteredCommands(loadPluginCommands());
+    const view = {} as PublicMarkdownView;
+    const rememberedSource = '# Root\n## Target\ntarget\n## Keep\nkeep\n';
+    const remembered = createEditor(
+      rememberedSource,
+      rememberedSource.indexOf('\ntarget\n') + 1
+    );
+    const failedSource = '# Root\n## Before\nbefore\n## Target\ntarget\n';
+    const failed = createEditor(
+      failedSource,
+      failedSource.indexOf('\ntarget\n') + 1
+    );
+    const invalidPlannerSource: unknown = undefined;
+    vi.mocked(failed.editor.getValue).mockReturnValueOnce(
+      invalidPlannerSource as string
+    );
+    const repeated = createEditor(
+      failedSource,
+      failedSource.indexOf('\ntarget\n') + 1
+    );
+
+    expect(
+      commands.get('promote-current-section')?.editorCheckCallback?.(
+        false,
+        remembered.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(
+      commands.get('demote-current-section')?.editorCheckCallback?.(
+        false,
+        failed.editor as Editor,
+        view
+      )
+    ).toBe(false);
+    expect(failed.replaceRange).not.toHaveBeenCalled();
+    expect(failed.setCursor).not.toHaveBeenCalled();
+
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeated.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeated.editor.getValue()).toBe(
+      '# Root\n## Before\nbefore\n# Target\ntarget\n'
+    );
+  });
+
+  it('propagates hierarchy mutation failures without replacing repeat memory', () => {
+    const commands = getRegisteredCommands(loadPluginCommands());
+    const view = {} as PublicMarkdownView;
+    const movementSource = '## One\none\n## Two\ntwo\n';
+    const movement = createEditor(
+      movementSource,
+      movementSource.indexOf('\none\n') + 1
+    );
+    const hierarchySource = '# Root\n## Target\ntarget\n## Keep\nkeep\n';
+    const hierarchy = createEditor(
+      hierarchySource,
+      hierarchySource.indexOf('\ntarget\n') + 1
+    );
+    const mutationFailure = new Error('hierarchy mutation failed');
+    hierarchy.replaceRange.mockImplementation(() => {
+      throw mutationFailure;
+    });
+    const repeatedSource = '## Left\nleft\n## Right\nright\n';
+    const repeated = createEditor(
+      repeatedSource,
+      repeatedSource.indexOf('\nleft\n') + 1
+    );
+
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        movement.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(() => {
+      commands.get('promote-current-section')?.editorCheckCallback?.(
+        false,
+        hierarchy.editor as Editor,
+        view
+      );
+    }).toThrow(mutationFailure);
+    expect(hierarchy.setCursor).not.toHaveBeenCalled();
+
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeated.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeated.editor.getValue()).toBe(
+      '## Right\nright\n## Left\nleft\n'
+    );
+  });
+
+  it('keeps hierarchy repeat memory after deletion', () => {
+    const commands = getRegisteredCommands(loadPluginCommands());
+    const view = {} as PublicMarkdownView;
+    const rememberedSource = '# Root\n## Target\ntarget\n## Keep\nkeep\n';
+    const remembered = createEditor(
+      rememberedSource,
+      rememberedSource.indexOf('\ntarget\n') + 1
+    );
+    const deletionSource = '# Delete\nbody\n# Keep\n';
+    const deletion = createEditor(
+      deletionSource,
+      deletionSource.indexOf('body')
+    );
+    const repeatedSource = '# Root\n## Alpha\nalpha\n## Beta\nbeta\n';
+    const repeated = createEditor(
+      repeatedSource,
+      repeatedSource.indexOf('\nalpha\n') + 1
+    );
+
+    expect(
+      commands.get('promote-current-section')?.editorCheckCallback?.(
+        false,
+        remembered.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    commands.get('delete-current-section')?.editorCallback?.(
+      deletion.editor as Editor,
+      view
+    );
+    expect(deletion.editor.getValue()).toBe('# Keep\n');
+
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeated.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeated.editor.getValue()).toBe(
+      '# Root\n# Alpha\nalpha\n## Beta\nbeta\n'
+    );
+  });
+
+  it('keeps the previous hierarchy action after linked and open extraction', async () => {
     const extractionSource = '# Extract me\nbody\n';
     const app = ObsidianApp.createConfigured__({
       files: {
@@ -2370,7 +2838,7 @@ describe('SectionalsPlugin', () => {
       })
     );
     const view = {} as PublicMarkdownView;
-    const rememberedSource = '## Alpha\na\n## Beta\nb\n';
+    const rememberedSource = '# Root\n## Alpha\na\n## Beta\nb\n';
     const remembered = createEditor(
       rememberedSource,
       rememberedSource.indexOf('\na\n') + 1
@@ -2395,7 +2863,7 @@ describe('SectionalsPlugin', () => {
     );
 
     expect(
-      commands.get('move-current-section-down')?.editorCheckCallback?.(
+      commands.get('promote-current-section')?.editorCheckCallback?.(
         false,
         remembered.editor as Editor,
         view
@@ -2447,7 +2915,7 @@ describe('SectionalsPlugin', () => {
       )
     ).toBe(true);
     expect(repeated.editor.getValue()).toBe(
-      '## Two\ntwo\n## One\none\n'
+      '# One\none\n## Two\ntwo\n'
     );
   });
 
