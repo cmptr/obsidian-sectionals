@@ -22,12 +22,12 @@ import type { StructuralAction, StructuralEditPlan } from './structural-action.t
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
 import { openDeletionTargetPicker } from './deletion-target-modal.ts';
+import { isSectionExtractionAvailable } from './section-extraction-availability.ts';
 import {
   executeSectionExtraction,
   ExtractionPreDelegationSourceChangedError,
   ExtractionSourceChangedError
 } from './section-extraction-executor.ts';
-import { planSectionExtraction } from './section-extraction-planner.ts';
 import { planStructuralAction } from './structural-action-planner.ts';
 
 export const NO_TARGET_NOTICE = 'No containing heading found.';
@@ -476,7 +476,7 @@ function isExtractionAvailable(editor: Editor): boolean {
   try {
     const source = editor.getValue();
     const cursorOffset = editor.posToOffset(editor.getCursor('head'));
-    return planSectionExtraction(source, cursorOffset).kind !== 'unavailable';
+    return isSectionExtractionAvailable(source, cursorOffset);
   } catch {
     return false;
   }

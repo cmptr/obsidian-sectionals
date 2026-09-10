@@ -35,6 +35,23 @@ import SectionalsPlugin, {
 } from './main.ts';
 import { executeSectionExtraction } from './section-extraction-executor.ts';
 
+const extractionPlannerSpies = vi.hoisted(() => ({
+  planSectionExtraction: vi.fn()
+}));
+
+vi.mock('./section-extraction-planner.ts', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('./section-extraction-planner.ts')
+  >();
+  extractionPlannerSpies.planSectionExtraction.mockImplementation(
+    actual.planSectionExtraction
+  );
+  return {
+    ...actual,
+    planSectionExtraction: extractionPlannerSpies.planSectionExtraction
+  };
+});
+
 interface EditorFixture {
   editor: SectionEditor;
   replaceRange: ReturnType<typeof vi.fn>;
@@ -1052,6 +1069,125 @@ describe('SectionalsPlugin', () => {
     expect(read).not.toHaveBeenCalled();
     expect(trashFile).not.toHaveBeenCalled();
     expect(getAbstractFileByPath).not.toHaveBeenCalled();
+  });
+
+  it('defers full extraction planning and runtime notices until execution for both modes', async () => {
+    const unusableTitleSource = '# /:*?\nbody\n';
+    const unresolvedLinkSource = '# Missing\n[missing](../Missing.md)\n';
+    const app = ObsidianApp.createConfigured__({
+      files: {
+        'Notes/linked-source.md': unusableTitleSource,
+        'Notes/open-source.md': unresolvedLinkSource
+      }
+    });
+    const linkedSourceFile = app.vault.getAbstractFileByPath(
+      'Notes/linked-source.md'
+    );
+    const openSourceFile = app.vault.getAbstractFileByPath(
+      'Notes/open-source.md'
+    );
+    if (
+      !(linkedSourceFile instanceof PublicTFile)
+      || !(linkedSourceFile instanceof TFile)
+      || !(openSourceFile instanceof PublicTFile)
+      || !(openSourceFile instanceof TFile)
+    ) {
+      throw new TypeError('Expected extraction boundary source files.');
+    }
+    const linked = createEditor(
+      unusableTitleSource,
+      unusableTitleSource.indexOf('body')
+    );
+    const open = createEditor(
+      unresolvedLinkSource,
+      unresolvedLinkSource.indexOf('[missing]')
+    );
+    const openOrigin = createMarkdownOrigin(app, openSourceFile, open.editor);
+    const getNewFileParent = vi.spyOn(app.fileManager, 'getNewFileParent');
+    const resolveLink = vi.spyOn(app.metadataCache, 'getFirstLinkpathDest');
+    const create = vi.spyOn(app.vault, 'create');
+    const notify = vi.fn();
+    const completions: Promise<void>[] = [];
+    const commands = getRegisteredCommands(
+      loadPluginCommands(asApp(app), {
+        execute: executeSectionExtraction,
+        notify,
+        observeExecution(execution) {
+          completions.push(execution);
+        }
+      })
+    );
+    const linkedExtraction = commands.get(
+      'extract-current-section-to-linked-note'
+    );
+    const openExtraction = commands.get(
+      'extract-current-section-to-new-note'
+    );
+    extractionPlannerSpies.planSectionExtraction.mockClear();
+
+    expect(
+      linkedExtraction?.editorCheckCallback?.(
+        true,
+        linked.editor as Editor,
+        asMarkdownFileInfo({ file: linkedSourceFile })
+      )
+    ).toBe(true);
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        true,
+        open.editor as Editor,
+        openOrigin.view
+      )
+    ).toBe(true);
+    expect(extractionPlannerSpies.planSectionExtraction).not.toHaveBeenCalled();
+    expect(getNewFileParent).not.toHaveBeenCalled();
+    expect(resolveLink).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(completions).toHaveLength(0);
+
+    expect(
+      linkedExtraction?.editorCheckCallback?.(
+        false,
+        linked.editor as Editor,
+        asMarkdownFileInfo({ file: linkedSourceFile })
+      )
+    ).toBe(true);
+    await completions[0];
+    expect(extractionPlannerSpies.planSectionExtraction).toHaveBeenCalledOnce();
+    expect(extractionPlannerSpies.planSectionExtraction).toHaveBeenCalledWith(
+      unusableTitleSource,
+      unusableTitleSource.indexOf('body')
+    );
+    expect(notify).toHaveBeenNthCalledWith(
+      1,
+      'Rename the heading before extracting it.'
+    );
+    expect(getNewFileParent).not.toHaveBeenCalled();
+    expect(resolveLink).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+
+    expect(
+      openExtraction?.editorCheckCallback?.(
+        false,
+        open.editor as Editor,
+        openOrigin.view
+      )
+    ).toBe(true);
+    await completions[1];
+    expect(extractionPlannerSpies.planSectionExtraction).toHaveBeenCalledTimes(2);
+    expect(extractionPlannerSpies.planSectionExtraction).toHaveBeenNthCalledWith(
+      2,
+      unresolvedLinkSource,
+      unresolvedLinkSource.indexOf('[missing]')
+    );
+    expect(getNewFileParent).toHaveBeenCalledOnce();
+    expect(resolveLink).toHaveBeenCalledOnce();
+    expect(create).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenNthCalledWith(
+      2,
+      'The section contains a relative link or embed that could not be resolved.'
+    );
   });
 
   it('starts one extraction asynchronously and returns before it settles', async () => {
