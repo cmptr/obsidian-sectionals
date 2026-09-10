@@ -77,7 +77,8 @@ export function sanitizeFilenameStem(displayTitle: string): null | string {
     displayTitle,
     (character) => isFilenameCharacterReserved(character) ? ' ' : character
   ).join('');
-  const filenameStem = normalizeTitleWhitespace(portableCharacters).replaceAll(
+  // eslint-disable-next-line unicorn/prefer-string-replace-all -- String.replaceAll requires a newer runtime than ES2020.
+  const filenameStem = normalizeTitleWhitespace(portableCharacters).replace(
     TRIMMABLE_FILENAME_EDGES,
     ''
   );
@@ -86,7 +87,8 @@ export function sanitizeFilenameStem(displayTitle: string): null | string {
 }
 
 function collapseTitleWhitespace(title: string): string {
-  return title.replaceAll(TITLE_WHITESPACE, ' ');
+  // eslint-disable-next-line unicorn/prefer-string-replace-all -- String.replaceAll requires a newer runtime than ES2020.
+  return title.replace(TITLE_WHITESPACE, ' ');
 }
 
 function deriveVisibleText(headingMarkup: string): string {
@@ -191,9 +193,11 @@ function shortenFilenameStem(filenameStem: string, maximumBytes: number): string
   if (wordBoundary > 0) {
     return shortenedStem
       .slice(0, wordBoundary)
-      .replaceAll(TRIMMABLE_FILENAME_EDGES, '');
+      // eslint-disable-next-line unicorn/prefer-string-replace-all -- String.replaceAll requires a newer runtime than ES2020.
+      .replace(TRIMMABLE_FILENAME_EDGES, '');
   }
-  return shortenedStem.replaceAll(TRIMMABLE_FILENAME_EDGES, '');
+  // eslint-disable-next-line unicorn/prefer-string-replace-all -- String.replaceAll requires a newer runtime than ES2020.
+  return shortenedStem.replace(TRIMMABLE_FILENAME_EDGES, '');
 }
 
 function utf8ByteLength(value: string): number {

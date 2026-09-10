@@ -7,6 +7,12 @@ export interface UnicodeEscapeStats {
   readonly density: number;
 }
 
+export function assertMobileCompatibleJavaScript(source: string): void {
+  if (source.includes('(?<=') || source.includes('(?<!')) {
+    throw new Error('Built JavaScript contains unsupported regex lookbehind.');
+  }
+}
+
 export function assertReadableJavaScript(source: string): UnicodeEscapeStats {
   const stats = inspectUnicodeEscapes(source);
   if (stats.density > MAX_UNICODE_ESCAPE_DENSITY) {

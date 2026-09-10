@@ -57,6 +57,18 @@ Run the full check before opening a pull request:
 make check
 ```
 
+## Check compatibility
+
+The automated compatibility gate runs `pnpm typecheck:minimum` against the Obsidian 1.8.7 API declarations and ES2020 libraries. Production builds also target ES2020 and reject emitted JavaScript that contains regular expression lookbehind. These checks cover API declarations, runtime libraries, the output language target, and unsupported lookbehind syntax. They are not a mobile execution test.
+
+Before a release, complete this manual mobile smoke test. CI does not run it.
+
+1. Run `make link VAULT=/absolute/path/to/test-vault`, or copy `dist/main.js` and `dist/manifest.json` to a mobile test vault.
+2. Load and enable Sectionals on current Android or iOS Obsidian.
+3. Invoke one deletion, one movement, one hierarchy change, linked extraction, and open extraction.
+4. Verify command availability, one-step editor Undo for in-buffer actions, destination retention rules, and no startup console error.
+5. Record the platform, OS, and Obsidian versions in the release review.
+
 ## Open a pull request
 
 Describe the problem, the approach you took, and how you tested it. Link any related issue and call out user-visible changes. Keep unrelated cleanup in a separate pull request.

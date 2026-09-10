@@ -21,6 +21,7 @@
     "test:coverage": "jiti scripts/test-coverage.ts",
     "test:watch": "jiti scripts/test-watch.ts",
     "typecheck": "jiti scripts/typecheck.ts",
+    "typecheck:minimum": "tsc --project tsconfig.minimum.json --noEmit",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build"
   },
   "dependencies": {
@@ -37,6 +38,7 @@
     "jiti": "2.7.0",
     "jsdom": "30.0.1",
     "obsidian": "1.13.1",
+    "obsidian-minimum": "npm:obsidian@1.8.7",
     "obsidian-dev-utils": "96.0.2",
     "obsidian-integration-testing": "10.3.2",
     "obsidian-test-mocks": "4.2.0",

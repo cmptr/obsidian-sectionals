@@ -167,27 +167,43 @@ function createRelativeMarkdownPath(
 
 function encodeMarkdownPathSegment(segment: string): string {
   const hexadecimalRadix = 16;
-  return encodeURIComponent(segment).replaceAll(
+  // eslint-disable-next-line unicorn/prefer-string-replace-all -- String.replaceAll requires a newer runtime than ES2020.
+  return encodeURIComponent(segment).replace(
     /[!'()*]/gu,
     (character) => `%${character.codePointAt(0)?.toString(hexadecimalRadix).toUpperCase() ?? ''}`
   );
 }
 
 function escapeWikilinkAlias(value: string): string {
-  const escapedBackslashes = value.replaceAll('\\', '\\\\');
-  return escapedBackslashes
+  const escapedBackslashes = replaceLiteralOccurrences(value, '\\', '\\\\');
+  const escapedDelimiters = replaceLiteralOccurrences(
+    escapedBackslashes,
+    '|',
     // eslint-disable-next-line unicorn/prefer-string-raw -- Escaping the delimiter requires a literal backslash prefix.
-    .replaceAll('|', '\\|')
+    '\\|'
+  );
+  return replaceLiteralOccurrences(
+    escapedDelimiters,
+    ']',
     // eslint-disable-next-line unicorn/prefer-string-raw -- Escaping the delimiter requires a literal backslash prefix.
-    .replaceAll(']', '\\]');
+    '\\]'
+  );
 }
 
 function escapeWikilinkTarget(value: string): string {
-  return escapeWikilinkAlias(value)
+  const escapedAlias = escapeWikilinkAlias(value);
+  const escapedHash = replaceLiteralOccurrences(
+    escapedAlias,
+    '#',
     // eslint-disable-next-line unicorn/prefer-string-raw -- Escaping the marker requires a literal backslash prefix.
-    .replaceAll('#', '\\#')
+    '\\#'
+  );
+  return replaceLiteralOccurrences(
+    escapedHash,
+    '^',
     // eslint-disable-next-line unicorn/prefer-string-raw -- Escaping the marker requires a literal backslash prefix.
-    .replaceAll('^', '\\^');
+    '\\^'
+  );
 }
 
 function getParentPath(path: string): string {
@@ -226,6 +242,14 @@ function normalizePosixPath(path: string): string {
     }
   }
   return segments.join('/');
+}
+
+function replaceLiteralOccurrences(
+  value: string,
+  search: string,
+  replacement: string
+): string {
+  return value.split(search).join(replacement);
 }
 
 function splitPath(path: string): readonly string[] {

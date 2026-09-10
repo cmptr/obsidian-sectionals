@@ -157,7 +157,8 @@ export function planSectionExtraction(
 }
 
 function collapseHeadingLineBoundaries(headingMarkup: string): string {
-  return headingMarkup.replaceAll(/[\t ]*\r?\n[\t ]*/gu, ' ');
+  // eslint-disable-next-line unicorn/prefer-string-replace-all -- String.replaceAll requires a newer runtime than ES2020.
+  return headingMarkup.replace(/[\t ]*\r?\n[\t ]*/gu, ' ');
 }
 
 function createDestinationBody(

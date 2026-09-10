@@ -156,7 +156,8 @@ export function parseMarkdownStructure(
         const lineStart = getHeadingLineStart(source, node);
         const syntaxEnd = getHeadingSyntaxEnd(source, node.to);
         headings.push({
-          container: containerStack.at(-1) ?? root,
+          // eslint-disable-next-line unicorn/prefer-at -- Array.at requires a newer runtime than ES2020.
+          container: containerStack[containerStack.length - 1] ?? root,
           level,
           lineStart,
           syntax: getHeadingSyntax(source, node, level, lineStart, syntaxEnd),
@@ -484,7 +485,8 @@ function sortAndMergeRanges(
     );
   const mergedRanges: MarkdownRange[] = [];
   for (const range of sortedRanges) {
-    const previous = mergedRanges.at(-1);
+    // eslint-disable-next-line unicorn/prefer-at -- Array.at requires a newer runtime than ES2020.
+    const previous = mergedRanges[mergedRanges.length - 1];
     if (previous === undefined || range.from > previous.to) {
       mergedRanges.push(range);
     } else if (range.to > previous.to) {

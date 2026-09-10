@@ -64,6 +64,8 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Audit production dependencies
         run: pnpm audit:prod
+      - name: Check minimum compatibility
+        run: pnpm typecheck:minimum
       - name: Run project checks
         run: make check
 `;
@@ -110,6 +112,8 @@ jobs:
         env:
           RELEASE_TAG: \${{ github.ref_name }}
         run: pnpm exec jiti scripts/release.ts validate "$RELEASE_TAG"
+      - name: Check minimum compatibility
+        run: pnpm typecheck:minimum
       - name: Build release artifacts
         run: make release
       - name: Calculate release asset hashes

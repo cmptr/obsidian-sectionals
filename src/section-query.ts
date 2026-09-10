@@ -15,11 +15,13 @@ export function collectMarkdownSections(
 
   return structure.headings.map((heading) => {
     const stack = stacksByContainer.get(heading.container.id) ?? [];
-    while ((stack.at(-1)?.level ?? 0) >= heading.level) {
+    // eslint-disable-next-line unicorn/prefer-at -- Array.at requires a newer runtime than ES2020.
+    while ((stack[stack.length - 1]?.level ?? 0) >= heading.level) {
       stack.pop();
     }
 
-    const parent = stack.at(-1) ?? null;
+    // eslint-disable-next-line unicorn/prefer-at -- Array.at requires a newer runtime than ES2020.
+    const parent = stack[stack.length - 1] ?? null;
     stack.push(heading);
     stacksByContainer.set(heading.container.id, stack);
 

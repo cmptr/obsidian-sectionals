@@ -666,7 +666,8 @@ function isWikilinkLike(source: string, node: MarkdownNode): boolean {
 
 function normalizeReferenceLabel(label: string): string {
   const normalizedWhitespace = decodeMarkdownSyntax(label)
-    .replaceAll(REFERENCE_WHITESPACE, ' ')
+    // eslint-disable-next-line unicorn/prefer-string-replace-all -- String.replaceAll requires a newer runtime than ES2020.
+    .replace(REFERENCE_WHITESPACE, ' ')
     .trim();
   let normalizedCase = '';
   for (const character of normalizedWhitespace) {
@@ -689,7 +690,8 @@ function parseMarkdown(markdown: string): ParsedMarkdown {
   parser.parse(markdown).iterate({
     enter(node) {
       const parsedNode = { from: node.from, name: node.name, to: node.to };
-      const parent = nodeStack.at(-1);
+      // eslint-disable-next-line unicorn/prefer-at -- Array.at requires a newer runtime than ES2020.
+      const parent = nodeStack[nodeStack.length - 1];
       nodes.push(parsedNode);
       parents.set(parsedNode, parent);
       nodeStack.push(parsedNode);
@@ -746,7 +748,8 @@ function sortAndMergeRanges(
   const sortedRanges = [...ranges].sort((left, right) => left.from - right.from || left.to - right.to);
   const mergedRanges: MarkdownRange[] = [];
   for (const range of sortedRanges) {
-    const previous = mergedRanges.at(-1);
+    // eslint-disable-next-line unicorn/prefer-at -- Array.at requires a newer runtime than ES2020.
+    const previous = mergedRanges[mergedRanges.length - 1];
     if (previous === undefined || range.from > previous.to) {
       mergedRanges.push(range);
     } else if (range.to > previous.to) {
