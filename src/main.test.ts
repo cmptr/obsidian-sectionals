@@ -999,7 +999,9 @@ describe('SectionalsPlugin', () => {
     const origin = createMarkdownOrigin(app, sourceFile, fixture.editor);
     const openFile = vi.spyOn(origin.leaf, 'openFile');
     const factory = vi.fn((currentSource: string) => createStructuralPlanningContext(currentSource));
-    const planningContextProvider = createEphemeralStructuralPlanningContextProvider(factory);
+    const planningContextProvider = vi.fn(
+      createEphemeralStructuralPlanningContextProvider(factory)
+    );
     const execute = vi.fn(() => Promise.resolve(true));
     const notify = vi.fn();
     const observeExecution = vi.fn();
@@ -1047,6 +1049,10 @@ describe('SectionalsPlugin', () => {
       );
     }
 
+    expect(planningContextProvider).toHaveBeenCalledTimes(12);
+    expect(planningContextProvider.mock.calls).toEqual(
+      Array.from({ length: 12 }, () => [fixture.editor, source])
+    );
     expect(factory).toHaveBeenCalledExactlyOnceWith(source);
     expect(fixture.replaceRange).not.toHaveBeenCalled();
     expect(fixture.setCursor).not.toHaveBeenCalled();

@@ -61,6 +61,11 @@ interface MarkdownNode {
   readonly to: number;
 }
 
+interface MarkdownStructureWorkObserver {
+  onBlockRangeVisit?(this: void): void;
+  onHeadingRangeVisit?(this: void): void;
+}
+
 /* eslint-disable no-magic-numbers -- Markdown heading node names map to specification-defined levels. */
 const HEADING_LEVEL_BY_NODE: Readonly<Record<string, HeadingLevel>> = {
   ATXHeading1: 1,
@@ -89,45 +94,21 @@ const SETEXT_HEADING_LEVEL_ONE: HeadingLevel = 1;
 
 export function excludeOffsetsInRanges(
   orderedOffsets: readonly number[],
-  ranges: readonly MarkdownRange[]
+  ranges: readonly MarkdownRange[],
+  onRangeVisit?: () => void
 ): readonly number[] {
-  const sortedRanges = ranges
-    .map((range) => ({ from: range.from, to: range.to }))
-    .sort(
-      (left, right) => left.from - right.from || left.to - right.to
-    );
-  const mergedRanges: MarkdownRange[] = [];
-  for (const range of sortedRanges) {
-    const previous = mergedRanges.at(-1);
-    if (previous === undefined || range.from > previous.to) {
-      mergedRanges.push(range);
-    } else if (range.to > previous.to) {
-      mergedRanges[mergedRanges.length - 1] = {
-        from: previous.from,
-        to: range.to
-      };
-    }
-  }
-
-  const outsideOffsets: number[] = [];
-  let rangeIndex = 0;
-  for (const offset of orderedOffsets) {
-    while (rangeIndex < mergedRanges.length) {
-      const currentRange = mergedRanges[rangeIndex];
-      if (currentRange === undefined || currentRange.to > offset) {
-        break;
-      }
-      rangeIndex += 1;
-    }
-    const range = mergedRanges[rangeIndex];
-    if (range === undefined || offset < range.from) {
-      outsideOffsets.push(offset);
-    }
-  }
-  return outsideOffsets;
+  return excludeOrderedItemsInRanges(
+    orderedOffsets,
+    ranges,
+    (offset) => offset,
+    onRangeVisit
+  );
 }
 
-export function parseMarkdownStructure(source: string): MarkdownStructure {
+export function parseMarkdownStructure(
+  source: string,
+  workObserver?: MarkdownStructureWorkObserver
+): MarkdownStructure {
   const root: MarkdownContainer = {
     depth: 0,
     end: source.length,
@@ -212,16 +193,18 @@ export function parseMarkdownStructure(source: string): MarkdownStructure {
   ];
 
   return {
-    blocks: blocks.filter((block) =>
-      blockProtectedRanges.every(
-        (range) => !containsOffset(range, block.start)
-      )
+    blocks: excludeOrderedItemsInRanges(
+      blocks,
+      blockProtectedRanges,
+      (block) => block.start,
+      workObserver?.onBlockRangeVisit
     ),
     containers,
-    headings: headings.filter((heading) =>
-      protectedRanges.every(
-        (range) => !containsOffset(range, heading.syntaxStart)
-      )
+    headings: excludeOrderedItemsInRanges(
+      headings,
+      protectedRanges,
+      (heading) => heading.syntaxStart,
+      workObserver?.onHeadingRangeVisit
     ),
     protectedRanges: blockProtectedRanges
   };
@@ -242,6 +225,36 @@ function createContainer(
     id: `blockquote:${String(node.from)}:${String(node.to)}`,
     start: getLineStart(source, node.from)
   };
+}
+
+function excludeOrderedItemsInRanges<T>(
+  orderedItems: readonly T[],
+  ranges: readonly MarkdownRange[],
+  getOffset: (item: T) => number,
+  onRangeVisit?: () => void
+): readonly T[] {
+  const mergedRanges = sortAndMergeRanges(ranges);
+  const outsideItems: T[] = [];
+  let rangeIndex = 0;
+  for (const item of orderedItems) {
+    const offset = getOffset(item);
+    while (rangeIndex < mergedRanges.length) {
+      const currentRange = mergedRanges[rangeIndex];
+      if (currentRange === undefined) {
+        break;
+      }
+      onRangeVisit?.();
+      if (currentRange.to > offset) {
+        break;
+      }
+      rangeIndex += 1;
+    }
+    const range = mergedRanges[rangeIndex];
+    if (range === undefined || !containsOffset(range, offset)) {
+      outsideItems.push(item);
+    }
+  }
+  return outsideItems;
 }
 
 function findFrontmatterRange(source: string): MarkdownRange | null {
@@ -459,4 +472,27 @@ function isCallout(source: string, node: MarkdownNode): boolean {
     .replace(/\r$/u, '')
     .replace(/^[\t ]*>[\t ]?/u, '');
   return /^\[![a-z\d-]+\][+-]?(?:[\t ]|$)/iu.test(openingLine);
+}
+
+function sortAndMergeRanges(
+  ranges: readonly MarkdownRange[]
+): readonly MarkdownRange[] {
+  const sortedRanges = ranges
+    .map((range) => ({ from: range.from, to: range.to }))
+    .sort(
+      (left, right) => left.from - right.from || left.to - right.to
+    );
+  const mergedRanges: MarkdownRange[] = [];
+  for (const range of sortedRanges) {
+    const previous = mergedRanges.at(-1);
+    if (previous === undefined || range.from > previous.to) {
+      mergedRanges.push(range);
+    } else if (range.to > previous.to) {
+      mergedRanges[mergedRanges.length - 1] = {
+        from: previous.from,
+        to: range.to
+      };
+    }
+  }
+  return mergedRanges;
 }

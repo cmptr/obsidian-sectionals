@@ -6,6 +6,21 @@ import type { MarkdownRange } from './markdown-structure.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structure imports compact.
 import { excludeOffsetsInRanges, parseMarkdownStructure } from './markdown-structure.ts';
 
+function createProtectedMembershipFixture(unitCount: number): string {
+  return Array.from({ length: unitCount }, (_, index) =>
+    [
+      `# Visible ${String(index)}`,
+      '```text',
+      `visible fence ${String(index)}`,
+      '```',
+      '%%',
+      `# Hidden ${String(index)}`,
+      `> hidden quote ${String(index)}`,
+      '%%',
+      ''
+    ].join('\n')).join('');
+}
+
 describe('parseMarkdownStructure', () => {
   it('returns ATX and Setext headings in source order', () => {
     const source = '# Root\nbody\n\nTitle\n---\n';
@@ -404,6 +419,40 @@ describe('parseMarkdownStructure', () => {
       { from: commentStart, to: source.length }
     ]);
   });
+
+  it('keeps block-versus-block-protected-range membership work linear', () => {
+    const unitCount = 128;
+    const source = createProtectedMembershipFixture(unitCount);
+    let blockRangeVisits = 0;
+
+    const structure = parseMarkdownStructure(source, {
+      onBlockRangeVisit() {
+        blockRangeVisits += 1;
+      }
+    });
+
+    expect(structure.blocks).toHaveLength(unitCount);
+    expect(structure.protectedRanges).toHaveLength(unitCount);
+    expect(blockRangeVisits).toBeGreaterThan(unitCount);
+    expect(blockRangeVisits).toBeLessThanOrEqual(4 * unitCount);
+  });
+
+  it('keeps heading-versus-protected-range membership work linear', () => {
+    const unitCount = 128;
+    const source = createProtectedMembershipFixture(unitCount);
+    let headingRangeVisits = 0;
+
+    const structure = parseMarkdownStructure(source, {
+      onHeadingRangeVisit() {
+        headingRangeVisits += 1;
+      }
+    });
+
+    expect(structure.headings).toHaveLength(unitCount);
+    expect(structure.protectedRanges).toHaveLength(unitCount);
+    expect(headingRangeVisits).toBeGreaterThan(unitCount);
+    expect(headingRangeVisits).toBeLessThanOrEqual(5 * unitCount);
+  });
 });
 
 describe('excludeOffsetsInRanges', () => {
@@ -435,18 +484,19 @@ describe('excludeOffsetsInRanges', () => {
     );
   });
 
-  it('keeps range reads linear for ordered delimiter offsets', () => {
+  it('keeps normalization and membership work linear for ordered delimiter offsets', () => {
     const itemCount = 1000;
-    let reads = 0;
+    let membershipVisits = 0;
+    let propertyReads = 0;
     const ranges = Array.from(
       { length: itemCount },
       (_, index): MarkdownRange => ({
         get from(): number {
-          reads += 1;
+          propertyReads += 1;
           return index * 2;
         },
         get to(): number {
-          reads += 1;
+          propertyReads += 1;
           return index * 2 + 1;
         }
       })
@@ -456,11 +506,17 @@ describe('excludeOffsetsInRanges', () => {
       (_, index) => index * 2 + 1
     );
 
-    expect(excludeOffsetsInRanges(orderedOffsets, ranges)).toEqual(
-      orderedOffsets
-    );
-    expect(reads).toBeLessThanOrEqual(
+    expect(
+      excludeOffsetsInRanges(orderedOffsets, ranges, () => {
+        membershipVisits += 1;
+      })
+    ).toEqual(orderedOffsets);
+    expect(propertyReads).toBeLessThanOrEqual(
       8 * (orderedOffsets.length + ranges.length)
+    );
+    expect(membershipVisits).toBeGreaterThan(0);
+    expect(membershipVisits).toBeLessThanOrEqual(
+      orderedOffsets.length + ranges.length
     );
   });
 });
