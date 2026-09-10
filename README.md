@@ -70,4 +70,4 @@ Relative Markdown links and embeds continue pointing to the same files after ext
 Links elsewhere in the vault to headings or block IDs inside the extracted section are not updated. Extraction also does not replace the movement remembered by **Repeat last structural action**.
 
 > [!warning] Undo after extraction
-> Undo puts the section back in the source note, but it does not delete the note Sectionals created. If the new note cannot be opened, the source section stays removed and Sectionals tells you where it created the note.
+> Undo puts the section back in the source note, but it does not delete the note Sectionals created. If the new note cannot be opened, the source section stays removed and Sectionals tells you where it created the note. When extraction is cancelled after creating a note, Sectionals retains that note and reports its path rather than risking deletion of changed content.

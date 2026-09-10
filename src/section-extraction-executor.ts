@@ -71,8 +71,6 @@ export interface ExtractionRuntime<File extends ExtractionFile> {
     content: string
   ) => Promise<ExtractionCreateResult<File>>;
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
-  readonly delete: (file: File) => Promise<void>;
-  // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
   readonly fileExists: (path: string) => boolean;
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
   readonly getLinktext: (file: File, sourcePath: string) => string;
@@ -96,11 +94,13 @@ export type ExtractionNotice =
   | 'create-failed'
   | 'cross-boundary-reference'
   | 'destination-changed'
+  | 'destination-unverified'
   | 'indeterminate-source-mutation'
   | 'open-failed'
   | 'relative-link-target-changed'
-  | 'rollback-failed'
+  | 'source-changed-note-kept'
   | 'source-changed'
+  | 'source-edit-failed-note-kept'
   | 'source-edit-failed'
   | 'unresolved-relative-link'
   | 'unusable-title';
@@ -112,11 +112,6 @@ export interface ExtractionNoticeDetails {
 
 interface CommitNoticeResult {
   readonly kind: 'notice';
-  readonly notice: ExtractionNoticeDetails;
-}
-
-interface CommitRollbackResult {
-  readonly kind: 'rollback';
   readonly notice: ExtractionNoticeDetails;
 }
 
@@ -140,35 +135,20 @@ interface CreatedDestination<File extends ExtractionFile> {
   readonly preparation: ReadyDestinationPreparation<File>;
 }
 
-interface DeletedRollbackResult {
-  readonly kind: 'deleted';
-}
-
 interface DestinationCreationFailure {
   readonly kind: 'failed';
   readonly notice: ExtractionNoticeDetails;
 }
 
-interface RollbackFailureNotice extends ExtractionNoticeDetails {
-  readonly kind: 'destination-changed' | 'rollback-failed';
+interface PathBearingExtractionNotice extends ExtractionNoticeDetails {
   readonly path: string;
 }
 
-interface FailedRollbackResult {
-  readonly kind: 'failed';
-  readonly notice: RollbackFailureNotice;
-}
-
-type CommitResult =
-  | CommitNoticeResult
-  | CommitRollbackResult
-  | CommitSuccessResult;
+type CommitResult = CommitNoticeResult | CommitSuccessResult;
 
 type DestinationCreationResult<File extends ExtractionFile> =
   | CreatedDestination<File>
   | DestinationCreationFailure;
-
-type RollbackResult = DeletedRollbackResult | FailedRollbackResult;
 
 // eslint-disable-next-line unicorn/consistent-boolean-name -- The approved executor name describes an action whose result reports handling.
 export async function executeSectionExtraction<File extends ExtractionFile>(
@@ -223,12 +203,7 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
       notify(createDestinationChangedNotice(creation.intendedPath));
       return true;
     }
-    await notifyAfterRollback(
-      runtime,
-      creation,
-      { kind: 'source-edit-failed' },
-      notify
-    );
+    notify(createSourceEditFailedNoteKeptNotice(creation.intendedPath));
     return true;
   }
   if (!doesCreatedDestinationMatch(creation)) {
@@ -238,15 +213,11 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
 
   const initialSourceFailure = getSourceSnapshotFailure(
     editor,
-    originalSource
+    originalSource,
+    creation.intendedPath
   );
   if (initialSourceFailure !== null) {
-    await notifyAfterRollback(
-      runtime,
-      creation,
-      initialSourceFailure,
-      notify
-    );
+    notify(initialSourceFailure);
     return true;
   }
   if (!doesCreatedDestinationMatch(creation)) {
@@ -258,11 +229,7 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
   try {
     destinationContent = await runtime.read(creation.file);
   } catch {
-    notify(
-      areResolvedTargetsCurrent(runtime, creation)
-        ? createRollbackFailedNotice(creation.intendedPath)
-        : createRelativeTargetChangedNotice(creation.intendedPath)
-    );
+    notify(createDestinationUnverifiedNotice(creation.intendedPath));
     return true;
   }
   if (!areResolvedTargetsCurrent(runtime, creation)) {
@@ -300,17 +267,7 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
     }
     return true;
   }
-  if (commit.kind === 'notice') {
-    notify(commit.notice);
-    return true;
-  }
-
-  await notifyAfterRollback(
-    runtime,
-    creation,
-    commit.notice,
-    notify
-  );
+  notify(commit.notice);
   return true;
 }
 
@@ -356,25 +313,24 @@ function buildSourceEdit<File extends ExtractionFile>(
   });
 }
 
-function createSourceOperationFailure(
-  error: unknown
+function createPostCreationSourceOperationFailure(
+  error: unknown,
+  path: string
 ): ExtractionNoticeDetails {
-  return {
-    kind: error instanceof ExtractionSourceChangedError
-      ? 'source-changed'
-      : 'source-edit-failed'
-  };
+  return error instanceof ExtractionSourceChangedError
+    ? createSourceChangedNoteKeptNotice(path)
+    : createSourceEditFailedNoteKeptNotice(path);
 }
 
 function getPreDelegationReplacementFailure<File extends ExtractionFile>(
   error: unknown,
   creation: CreatedDestination<File>
-): CommitNoticeResult | CommitRollbackResult | null {
+): CommitNoticeResult | null {
   if (!(error instanceof ExtractionPreDelegationSourceChangedError)) {
     return null;
   }
   return doesCreatedDestinationMatch(creation)
-    ? { kind: 'rollback', notice: { kind: 'source-changed' } }
+    ? createCommitNotice(createSourceChangedNoteKeptNotice(creation.intendedPath))
     : createCommitDestinationChanged(creation.intendedPath);
 }
 
@@ -392,9 +348,13 @@ function commitSourceExtraction<File extends ExtractionFile>(
     return createCommitDestinationChanged(creation.intendedPath);
   }
 
-  const sourceFailure = getSourceSnapshotFailure(editor, originalSource);
+  const sourceFailure = getSourceSnapshotFailure(
+    editor,
+    originalSource,
+    creation.intendedPath
+  );
   if (sourceFailure !== null) {
-    return { kind: 'rollback', notice: sourceFailure };
+    return createCommitNotice(sourceFailure);
   }
 
   let finalEdit: ExtractionSourceEdit;
@@ -411,7 +371,9 @@ function commitSourceExtraction<File extends ExtractionFile>(
     if (!doesCreatedDestinationMatch(creation)) {
       return createCommitDestinationChanged(creation.intendedPath);
     }
-    return { kind: 'rollback', notice: { kind: 'source-edit-failed' } };
+    return createCommitNotice(
+      createSourceEditFailedNoteKeptNotice(creation.intendedPath)
+    );
   }
   if (!doesCreatedDestinationMatch(creation)) {
     return createCommitDestinationChanged(creation.intendedPath);
@@ -429,7 +391,9 @@ function commitSourceExtraction<File extends ExtractionFile>(
     if (!doesCreatedDestinationMatch(creation)) {
       return createCommitDestinationChanged(creation.intendedPath);
     }
-    return { kind: 'rollback', notice: createSourceOperationFailure(error) };
+    return createCommitNotice(
+      createPostCreationSourceOperationFailure(error, creation.intendedPath)
+    );
   }
   if (!doesCreatedDestinationMatch(creation)) {
     return createCommitDestinationChanged(creation.intendedPath);
@@ -438,9 +402,13 @@ function commitSourceExtraction<File extends ExtractionFile>(
   const expectedSource = originalSource.slice(0, edit.range.from)
     + edit.replacement
     + originalSource.slice(edit.range.to);
-  const finalSourceFailure = getSourceSnapshotFailure(editor, originalSource);
+  const finalSourceFailure = getSourceSnapshotFailure(
+    editor,
+    originalSource,
+    creation.intendedPath
+  );
   if (finalSourceFailure !== null) {
-    return { kind: 'rollback', notice: finalSourceFailure };
+    return createCommitNotice(finalSourceFailure);
   }
   const destinationFailure = getCommitDestinationFailure(runtime, creation);
   if (destinationFailure !== null) {
@@ -469,10 +437,9 @@ function commitSourceExtraction<File extends ExtractionFile>(
   }
   if (sourceAfterReplacement === originalSource) {
     return doesCreatedDestinationMatch(creation)
-      ? {
-        kind: 'rollback',
-        notice: { kind: 'source-edit-failed' }
-      }
+      ? createCommitNotice(
+        createSourceEditFailedNoteKeptNotice(creation.intendedPath)
+      )
       : createCommitDestinationChanged(creation.intendedPath);
   }
   if (sourceAfterReplacement !== expectedSource) {
@@ -485,7 +452,9 @@ function commitSourceExtraction<File extends ExtractionFile>(
     ? {
       edit,
       kind: 'success',
-      sourceNotice: { kind: 'source-edit-failed' }
+      sourceNotice: createSourceEditFailedNoteKeptNotice(
+        creation.intendedPath
+      )
     }
     : { edit, kind: 'success' };
 }
@@ -511,7 +480,7 @@ async function finishCommittedExtraction<File extends ExtractionFile>(
   try {
     editor.setCursor(editor.offsetToPos(commit.edit.cursorOffset));
   } catch {
-    return { kind: 'source-edit-failed' };
+    return createSourceEditFailedNoteKeptNotice(creation.intendedPath);
   }
   return commit.sourceNotice ?? null;
 }
@@ -597,7 +566,13 @@ function areResolvedTargetsCurrent<File extends ExtractionFile>(
 }
 
 function createCommitDestinationChanged(path: string): CommitNoticeResult {
-  return { kind: 'notice', notice: createDestinationChangedNotice(path) };
+  return createCommitNotice(createDestinationChangedNotice(path));
+}
+
+function createCommitNotice(
+  notice: ExtractionNoticeDetails
+): CommitNoticeResult {
+  return { kind: 'notice', notice };
 }
 
 function createCommitRelativeTargetChanged(path: string): CommitNoticeResult {
@@ -606,8 +581,14 @@ function createCommitRelativeTargetChanged(path: string): CommitNoticeResult {
 
 function createDestinationChangedNotice(
   path: string
-): RollbackFailureNotice {
+): PathBearingExtractionNotice {
   return { kind: 'destination-changed', path };
+}
+
+function createDestinationUnverifiedNotice(
+  path: string
+): PathBearingExtractionNotice {
+  return { kind: 'destination-unverified', path };
 }
 
 function createIndeterminateCommitNotice(path: string): CommitNoticeResult {
@@ -631,12 +612,20 @@ function getCommitDestinationFailure<File extends ExtractionFile>(
 
 function createRelativeTargetChangedNotice(
   path: string
-): ExtractionNoticeDetails {
+): PathBearingExtractionNotice {
   return { kind: 'relative-link-target-changed', path };
 }
 
-function createRollbackFailedNotice(path: string): RollbackFailureNotice {
-  return { kind: 'rollback-failed', path };
+function createSourceChangedNoteKeptNotice(
+  path: string
+): PathBearingExtractionNotice {
+  return { kind: 'source-changed-note-kept', path };
+}
+
+function createSourceEditFailedNoteKeptNotice(
+  path: string
+): PathBearingExtractionNotice {
+  return { kind: 'source-edit-failed-note-kept', path };
 }
 
 function doesCreatedDestinationMatch<File extends ExtractionFile>(
@@ -659,81 +648,16 @@ function getExpectedBasename(filename: string): string {
 
 function getSourceSnapshotFailure(
   editor: ExtractionEditor,
-  originalSource: string
+  originalSource: string,
+  destinationPath: string
 ): ExtractionNoticeDetails | null {
   try {
     return editor.getValue() === originalSource
       ? null
-      : { kind: 'source-changed' };
+      : createSourceChangedNoteKeptNotice(destinationPath);
   } catch (error) {
-    return createSourceOperationFailure(error);
+    return createPostCreationSourceOperationFailure(error, destinationPath);
   }
-}
-
-async function notifyAfterRollback<File extends ExtractionFile>(
-  runtime: ExtractionRuntime<File>,
-  creation: CreatedDestination<File>,
-  successNotice: ExtractionNoticeDetails,
-  notify: (details: ExtractionNoticeDetails) => void
-): Promise<void> {
-  const rollback = await rollbackCreatedFile(runtime, creation);
-  notify(rollback.kind === 'deleted' ? successNotice : rollback.notice);
-}
-
-async function rollbackCreatedFile<File extends ExtractionFile>(
-  runtime: ExtractionRuntime<File>,
-  creation: CreatedDestination<File>
-): Promise<RollbackResult> {
-  if (!doesCreatedDestinationMatch(creation)) {
-    return {
-      kind: 'failed',
-      notice: createDestinationChangedNotice(creation.intendedPath)
-    };
-  }
-
-  let liveContent: string;
-  try {
-    liveContent = await runtime.read(creation.file);
-  } catch {
-    return {
-      kind: 'failed',
-      notice: createRollbackFailedNotice(creation.intendedPath)
-    };
-  }
-  if (!doesCreatedDestinationMatch(creation)) {
-    return {
-      kind: 'failed',
-      notice: createDestinationChangedNotice(creation.intendedPath)
-    };
-  }
-  if (liveContent !== creation.preparation.content) {
-    return {
-      kind: 'failed',
-      notice: createDestinationChangedNotice(creation.intendedPath)
-    };
-  }
-  if (!doesCreatedDestinationMatch(creation)) {
-    return {
-      kind: 'failed',
-      notice: createDestinationChangedNotice(creation.intendedPath)
-    };
-  }
-
-  try {
-    await runtime.delete(creation.file);
-  } catch {
-    return {
-      kind: 'failed',
-      notice: createRollbackFailedNotice(creation.intendedPath)
-    };
-  }
-  if (!doesCreatedDestinationMatch(creation)) {
-    return {
-      kind: 'failed',
-      notice: createRollbackFailedNotice(creation.intendedPath)
-    };
-  }
-  return { kind: 'deleted' };
 }
 
 /* eslint-enable perfectionist/sort-modules -- Transaction module definitions are complete. */

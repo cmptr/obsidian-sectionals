@@ -132,14 +132,6 @@ class StatefulRuntime implements ExtractionRuntime<FakeFile> {
     }
     return createdCreateResult(this.storeCreatedFile(path, content));
   });
-  readonly delete = vi.fn(async (file: FakeFile) => {
-    this.events.push(`delete:${file.path}:${String(file.id)}`);
-    const entry = this.files.get(file.path);
-    if (entry?.file !== file || entry.file.id !== file.id) {
-      throw new Error('file identity changed before delete');
-    }
-    this.files.delete(file.path);
-  });
   readonly fileExists = vi.fn((path: string) => {
     this.events.push(`fileExists:${path}`);
     return this.files.has(path);
@@ -228,7 +220,6 @@ describe('executeSectionExtraction validation', () => {
     ).resolves.toBe(false);
     expect(notices).toEqual([]);
     expect(runtime.create).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
@@ -257,7 +248,6 @@ describe('executeSectionExtraction validation', () => {
       ).resolves.toBe(true);
       expect(notices).toEqual([{ kind: expectedNotice }]);
       expect(runtime.create).not.toHaveBeenCalled();
-      expect(runtime.delete).not.toHaveBeenCalled();
       expect(editor.replaceRange).not.toHaveBeenCalled();
       expect(editor.setCursor).not.toHaveBeenCalled();
     }
@@ -283,7 +273,6 @@ describe('executeSectionExtraction validation', () => {
     expect(notices).toEqual([]);
     expect(openCreatedFile).not.toHaveBeenCalled();
     expect(runtime.create).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -307,7 +296,6 @@ describe('executeSectionExtraction validation', () => {
     expect(notices).toEqual([{ kind: 'unusable-title' }]);
     expect(openCreatedFile).not.toHaveBeenCalled();
     expect(runtime.create).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 });
@@ -362,7 +350,6 @@ describe('executeSectionExtraction success', () => {
       'offsetToPos:0',
       'setCursor'
     ]);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(runtime.isCurrentFile).not.toHaveBeenCalled();
   });
 
@@ -454,7 +441,6 @@ describe('executeSectionExtraction success', () => {
       { ch: 0, line: 2 }
     );
     expect(editor.setCursor).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     const replacementIndex = events.indexOf('replaceRange');
     const commitInspectionIndex = events.indexOf('getValue', replacementIndex + 1);
     const openingIndex = events.indexOf('open:Extracted/Beta.md');
@@ -498,7 +484,6 @@ describe('executeSectionExtraction relative target races', () => {
     expect(runtime.files.has(destinationPath)).toBe(true);
     expect(editor.replaceRange).not.toHaveBeenCalled();
     expect(openCreatedFile).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(notices).toEqual([
       { kind: 'relative-link-target-changed', path: destinationPath }
     ]);
@@ -535,7 +520,6 @@ describe('executeSectionExtraction relative target races', () => {
     expect(runtime.files.has(destinationPath)).toBe(true);
     expect(editor.replaceRange).not.toHaveBeenCalled();
     expect(openCreatedFile).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(notices).toEqual([
       { kind: 'relative-link-target-changed', path: destinationPath }
     ]);
@@ -571,7 +555,6 @@ describe('executeSectionExtraction relative target races', () => {
     expect(runtime.files.has(destinationPath)).toBe(true);
     expect(editor.replaceRange).not.toHaveBeenCalled();
     expect(openCreatedFile).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(notices).toEqual([
       { kind: 'relative-link-target-changed', path: destinationPath }
     ]);
@@ -602,7 +585,6 @@ describe('executeSectionExtraction relative target races', () => {
     expect(runtime.files.has(destinationPath)).toBe(true);
     expect(editor.replaceRange).not.toHaveBeenCalled();
     expect(openCreatedFile).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(notices).toEqual([
       { kind: 'relative-link-target-changed', path: destinationPath }
     ]);
@@ -617,9 +599,11 @@ describe('executeSectionExtraction relative target races', () => {
     const runtime = new StatefulRuntime();
     const firstTarget = runtime.storeCreatedFile('Assets/First.md', 'first');
     const secondTarget = runtime.storeCreatedFile('Assets/Second.md', 'second');
-    runtime.resolveLink.mockImplementation((linkpath) => linkpath.includes('First')
-      ? firstTarget
-      : secondTarget);
+    runtime.resolveLink.mockImplementation((linkpath) =>
+      linkpath.includes('First')
+        ? firstTarget
+        : secondTarget
+    );
     runtime.afterRead = (file): void => {
       if (file.path !== destinationPath) {
         return;
@@ -650,7 +634,6 @@ describe('executeSectionExtraction relative target races', () => {
     );
     expect(editor.replaceRange).not.toHaveBeenCalled();
     expect(openCreatedFile).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(notices).toEqual([
       { kind: 'relative-link-target-changed', path: destinationPath }
     ]);
@@ -683,7 +666,6 @@ describe('executeSectionExtraction open-mode postcommit', () => {
     expect(openCreatedFile).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ path: 'Extracted/Beta.md' })
     );
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(notices).toEqual([{
       kind: 'open-failed',
       path: 'Extracted/Beta.md'
@@ -728,8 +710,10 @@ describe('executeSectionExtraction open-mode postcommit', () => {
     expect(commitInspectionIndex).toBeGreaterThan(replacementIndex);
     expect(openingIndex).toBeGreaterThan(commitInspectionIndex);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
   });
 
   it('reports only the retained path when opening an exact throwing commit also fails', async () => {
@@ -762,7 +746,6 @@ describe('executeSectionExtraction open-mode postcommit', () => {
     expect(editor.currentSource()).toBe('');
     expect(openCreatedFile).toHaveBeenCalledOnce();
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(notices).toEqual([{
       kind: 'open-failed',
       path: 'Extracted/Beta.md'
@@ -792,7 +775,6 @@ describe('executeSectionExtraction created-file identity', () => {
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(runtime.getLinktext).not.toHaveBeenCalled();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
   });
 
   it('retains an unknown file whose returned path cannot be inspected', async () => {
@@ -819,7 +801,6 @@ describe('executeSectionExtraction created-file identity', () => {
     }]);
     expect(runtime.getLinktext).not.toHaveBeenCalled();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
   });
 
   it('retains an unknown file returned with the wrong basename', async () => {
@@ -843,7 +824,6 @@ describe('executeSectionExtraction created-file identity', () => {
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(runtime.getLinktext).not.toHaveBeenCalled();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
   });
 
   it('retains the destination when its path changes during destination readback', async () => {
@@ -863,7 +843,6 @@ describe('executeSectionExtraction created-file identity', () => {
       path: 'Extracted/Beta.md'
     }]);
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -892,7 +871,6 @@ describe('executeSectionExtraction created-file identity', () => {
     }]);
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(openCreatedFile).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -912,11 +890,10 @@ describe('executeSectionExtraction created-file identity', () => {
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
-      kind: 'rollback-failed',
+      kind: 'destination-unverified',
       path: 'Extracted/Beta.md'
     }]);
     expect(runtime.read).toHaveBeenCalledExactlyOnceWith(returnedFile);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 });
@@ -955,7 +932,6 @@ describe('executeSectionExtraction final commit gate', () => {
     expect(didMutationMicrotaskRun).toBe(true);
     expect(didMutationRunBeforeReplacement).toBe(false);
     expect(editor.replaceRange).toHaveBeenCalledOnce();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(notices).toEqual([]);
   });
 
@@ -997,7 +973,6 @@ describe('executeSectionExtraction final commit gate', () => {
     }]);
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
   });
 });
 
@@ -1069,7 +1044,6 @@ describe('executeSectionExtraction collision races', () => {
       'Projects/Source.md'
     );
     expect(editor.currentSource()).toBe('[[Beta 1|Beta]]\n');
-    expect(runtime.delete).not.toHaveBeenCalled();
   });
 
   it('stops after one explicit failed create result', async () => {
@@ -1086,7 +1060,6 @@ describe('executeSectionExtraction collision races', () => {
     expect(runtime.create).toHaveBeenCalledOnce();
     expect(runtime.fileExists).toHaveBeenCalledOnce();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
@@ -1105,7 +1078,6 @@ describe('executeSectionExtraction collision races', () => {
     expect(runtime.create).toHaveBeenCalledOnce();
     expect(runtime.fileExists).toHaveBeenCalledOnce();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
@@ -1138,7 +1110,6 @@ describe('executeSectionExtraction collision races', () => {
     expect(runtime.create).toHaveBeenCalledOnce();
     expect(runtime.fileExists).toHaveBeenCalledOnce();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(openCreatedFile).not.toHaveBeenCalled();
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
@@ -1172,7 +1143,6 @@ describe('executeSectionExtraction collision races', () => {
     expect(runtime.create).toHaveBeenCalledOnce();
     expect(runtime.fileExists).toHaveBeenCalledOnce();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(openCreatedFile).not.toHaveBeenCalled();
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
@@ -1196,7 +1166,6 @@ describe('executeSectionExtraction collision races', () => {
     expect(runtime.create.mock.calls.at(-1)?.[0]).toBe(
       'Extracted/Beta 9999.md'
     );
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -1213,13 +1182,12 @@ describe('executeSectionExtraction collision races', () => {
     expect(notices).toEqual([{ kind: 'create-failed' }]);
     expect(runtime.fileExists).toHaveBeenCalledTimes(10_000);
     expect(runtime.create).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 });
 
-describe('executeSectionExtraction pre-commit rollback', () => {
-  it('deletes only its unchanged created file when the source becomes stale', async () => {
+describe('executeSectionExtraction post-create retention', () => {
+  it('retains its unchanged created file when the source becomes stale', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
     let createdFile: FakeFile | undefined;
@@ -1235,15 +1203,21 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
-    expect(notices).toEqual([{ kind: 'source-changed' }]);
+    expect(notices).toEqual([{
+      kind: 'source-changed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
     expect(createdFile).toBeDefined();
-    expect(runtime.read).toHaveBeenCalledExactlyOnceWith(createdFile);
-    expect(runtime.delete).toHaveBeenCalledExactlyOnceWith(createdFile);
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.files.get('Extracted/Beta.md')?.file).toBe(createdFile);
+    expect(runtime.files.get('Extracted/Beta.md')?.content).toBe(
+      '# Beta\n\nbody\n'
+    );
+    expect(editor.currentSource()).toBe('# Beta\nchanged\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('rolls back a stale open extraction without opening the created file', async () => {
+  it('retains a stale open extraction without opening the created file', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
     runtime.create.mockImplementationOnce(async (path, content) => {
@@ -1265,14 +1239,17 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       )
     ).resolves.toBe(true);
 
-    expect(notices).toEqual([{ kind: 'source-changed' }]);
+    expect(notices).toEqual([{
+      kind: 'source-changed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
     expect(openCreatedFile).not.toHaveBeenCalled();
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(editor.currentSource()).toBe('# Beta\nchanged\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('rolls back when the source changes during destination readback', async () => {
+  it('retains the destination when the source changes during destination readback', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
     runtime.read.mockImplementationOnce(async (file) => {
@@ -1289,14 +1266,17 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
-    expect(notices).toEqual([{ kind: 'source-changed' }]);
-    expect(runtime.read).toHaveBeenCalledTimes(2);
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(notices).toEqual([{
+      kind: 'source-changed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.read).toHaveBeenCalledOnce();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(editor.currentSource()).toBe('# Zeta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('rolls back when the live source cannot be read before replacement', async () => {
+  it('retains the destination when the live source cannot be read before replacement', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
     runtime.create.mockImplementationOnce(async (path, content) => {
@@ -1313,10 +1293,13 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
-    expect(runtime.read).toHaveBeenCalledOnce();
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -1344,7 +1327,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     expect(runtime.files.get('Extracted/Beta.md')?.content).toBe(
       'changed externally'
     );
-    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -1359,69 +1342,15 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{
-      kind: 'rollback-failed',
+      kind: 'destination-unverified',
       path: 'Extracted/Beta.md'
     }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('retains the created file and reports rollback failure when rollback readback fails', async () => {
-    const editor = new StatefulEditor('# Beta\nbody\n', 9);
-    const runtime = new StatefulRuntime();
-    runtime.create.mockImplementationOnce(async (path, content) => {
-      runtime.events.push(`create:${path}`);
-      const file = runtime.storeCreatedFile(path, content);
-      editor.overwriteSource('# Zeta\nbody\n');
-      return createdCreateResult(file);
-    });
-    runtime.read.mockRejectedValueOnce(new Error('read failed'));
-    const { notices, notify } = createNotify();
-
-    await expect(
-      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
-    ).resolves.toBe(true);
-
-    expect(notices).toEqual([{
-      kind: 'rollback-failed',
-      path: 'Extracted/Beta.md'
-    }]);
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
-    expect(editor.replaceRange).not.toHaveBeenCalled();
-  });
-
-  it('retains the created file and reports rollback failure when deletion fails', async () => {
-    const editor = new StatefulEditor('# Beta\nbody\n', 9);
-    const runtime = new StatefulRuntime();
-    runtime.create.mockImplementationOnce(async (path, content) => {
-      runtime.events.push(`create:${path}`);
-      const file = runtime.storeCreatedFile(path, content);
-      editor.overwriteSource('# Beta\nchanged\n');
-      return createdCreateResult(file);
-    });
-    runtime.delete.mockImplementationOnce(async (file) => {
-      runtime.events.push(`delete:${file.path}`);
-      throw new Error('delete failed');
-    });
-    const { notices, notify } = createNotify();
-
-    await expect(
-      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
-    ).resolves.toBe(true);
-
-    expect(notices).toEqual([{
-      kind: 'rollback-failed',
-      path: 'Extracted/Beta.md'
-    }]);
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.read).toHaveBeenCalledOnce();
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(editor.replaceRange).not.toHaveBeenCalled();
-  });
-
-  it('rolls back an unchanged file when shortest-link generation fails', async () => {
+  it('retains an unchanged destination when shortest-link generation fails', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
     runtime.getLinktext.mockImplementationOnce(() => {
@@ -1433,40 +1362,21 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
-    expect(runtime.read).toHaveBeenCalledOnce();
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(editor.replaceRange).not.toHaveBeenCalled();
-  });
-
-  it('retains a rollback target whose path changes during readback', async () => {
-    const editor = new StatefulEditor('# Beta\nbody\n', 9);
-    const runtime = new StatefulRuntime();
-    runtime.getLinktext.mockImplementationOnce(() => {
-      throw new Error('link generation failed');
-    });
-    runtime.afterRead = (file): void => {
-      file.path = 'Moved/Beta.md';
-    };
-    const { notices, notify } = createNotify();
-
-    await expect(
-      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
-    ).resolves.toBe(true);
-
     expect(notices).toEqual([{
-      kind: 'destination-changed',
+      kind: 'source-edit-failed-note-kept',
       path: 'Extracted/Beta.md'
     }]);
-    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('retains an identity replacement installed between rollback read and delete', async () => {
+  it('never reaches the former read-delete boundary after source edit construction fails', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
     let createdFile: FakeFile | undefined;
+    let didReachFormerRollbackBoundary = false;
     runtime.create.mockImplementationOnce(async (path, content) => {
       createdFile = runtime.storeCreatedFile(path, content);
       return createdCreateResult(createdFile);
@@ -1475,10 +1385,11 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       throw new Error('link generation failed');
     });
     runtime.afterRead = (file): void => {
+      didReachFormerRollbackBoundary = true;
       const entry = runtime.files.get(file.path);
       if (entry !== undefined) {
         runtime.files.set(file.path, {
-          content: entry.content,
+          content: 'changed at former rollback boundary',
           file: new FakeFile(999, file.basename, file.path)
         });
       }
@@ -1489,16 +1400,22 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
+    expect(didReachFormerRollbackBoundary).toBe(false);
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.files.get('Extracted/Beta.md')?.file).toBe(createdFile);
+    expect(runtime.files.get('Extracted/Beta.md')?.content).toBe(
+      '# Beta\n\nbody\n'
+    );
+    expect('delete' in runtime).toBe(false);
     expect(notices).toEqual([{
-      kind: 'rollback-failed',
+      kind: 'source-edit-failed-note-kept',
       path: 'Extracted/Beta.md'
     }]);
-    expect(runtime.delete).toHaveBeenCalledExactlyOnceWith(createdFile);
-    expect(runtime.files.get('Extracted/Beta.md')?.file).not.toBe(createdFile);
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('rolls back when source range mapping fails before replacement', async () => {
+  it('retains the destination when source range mapping fails before replacement', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     editor.offsetToPos.mockImplementationOnce(() => {
       throw new Error('mapping failed');
@@ -1510,10 +1427,13 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
     ).resolves.toBe(true);
 
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
-    expect(runtime.read).toHaveBeenCalledTimes(2);
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.read).toHaveBeenCalledOnce();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -1540,7 +1460,6 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     expect(openCreatedFile).not.toHaveBeenCalled();
     expect(runtime.create).not.toHaveBeenCalled();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
@@ -1559,13 +1478,12 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     expect(notices).toEqual([{ kind: 'unresolved-relative-link' }]);
     expect(runtime.create).not.toHaveBeenCalled();
     expect(runtime.read).not.toHaveBeenCalled();
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 });
 
 describe('executeSectionExtraction source mutation outcomes', () => {
-  it('rolls back when replaceRange returns without mutating the source', async () => {
+  it('retains the destination when replaceRange returns without mutating the source', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     editor.replaceRange.mockImplementationOnce(() => {
       editor.events.push('replaceRange:no-op');
@@ -1578,13 +1496,15 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
-  it('rolls back and does not open when open-mode replaceRange returns without mutation', async () => {
+  it('retains the destination and does not open when open-mode replaceRange returns without mutation', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     editor.replaceRange.mockImplementationOnce(() => {
       editor.events.push('replaceRange:no-op');
@@ -1605,9 +1525,11 @@ describe('executeSectionExtraction source mutation outcomes', () => {
 
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(openCreatedFile).not.toHaveBeenCalled();
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
@@ -1637,7 +1559,6 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       path: 'Extracted/Beta.md'
     }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
@@ -1658,11 +1579,10 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       path: 'Extracted/Beta.md'
     }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
-  it('rolls back when replaceRange throws before mutating the source', async () => {
+  it('retains the destination when replaceRange throws before mutating the source', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     editor.replaceRange.mockImplementationOnce(() => {
       throw new Error('edit rejected');
@@ -1675,10 +1595,12 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('# Beta\nbody\n');
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
-    expect(runtime.read).toHaveBeenCalledTimes(2);
-    expect(runtime.delete).toHaveBeenCalledOnce();
-    expect(runtime.files.has('Extracted/Beta.md')).toBe(false);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
+    expect(runtime.read).toHaveBeenCalledOnce();
+    expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
@@ -1701,9 +1623,11 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('[[Beta]]\n');
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).toHaveBeenCalledOnce();
   });
 
@@ -1726,9 +1650,11 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('[[Beta]]\n');
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).toHaveBeenCalledOnce();
   });
 
@@ -1758,9 +1684,11 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('');
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(openCreatedFile).toHaveBeenCalledOnce();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
@@ -1794,7 +1722,6 @@ describe('executeSectionExtraction source mutation outcomes', () => {
 
     expect(editor.currentSource()).toBe('');
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(openCreatedFile).toHaveBeenCalledOnce();
     expect(notices).toEqual([{
       kind: 'open-failed',
@@ -1821,7 +1748,6 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       path: 'Extracted/Beta.md'
     }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
@@ -1851,7 +1777,6 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       path: 'Extracted/Beta.md'
     }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(openCreatedFile).not.toHaveBeenCalled();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
@@ -1875,7 +1800,6 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       path: 'Extracted/Beta.md'
     }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
@@ -1904,7 +1828,6 @@ describe('executeSectionExtraction source mutation outcomes', () => {
       path: 'Extracted/Beta.md'
     }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).not.toHaveBeenCalled();
   });
 
@@ -1921,9 +1844,11 @@ describe('executeSectionExtraction source mutation outcomes', () => {
     ).resolves.toBe(true);
 
     expect(editor.currentSource()).toBe('[[Beta]]\n');
-    expect(notices).toEqual([{ kind: 'source-edit-failed' }]);
+    expect(notices).toEqual([{
+      kind: 'source-edit-failed-note-kept',
+      path: 'Extracted/Beta.md'
+    }]);
     expect(runtime.files.has('Extracted/Beta.md')).toBe(true);
-    expect(runtime.delete).not.toHaveBeenCalled();
     expect(editor.setCursor).toHaveBeenCalledOnce();
   });
 });

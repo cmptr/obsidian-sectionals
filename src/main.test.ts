@@ -372,22 +372,23 @@ async function runPostCreateIdentityMutation(
 
   await invokeIdentityExtraction(harness);
 
-  const destination = trashFile.mock.calls.find(
-    ([file]) => file.path === IDENTITY_DESTINATION_PATH
-  )?.[0];
+  const destination = harness.app.vault.getAbstractFileByPath(
+    IDENTITY_DESTINATION_PATH
+  );
   expect(destination).toBeInstanceOf(PublicTFile);
-  expect(
-    trashFile.mock.calls.filter(([file]) => file === destination)
-  ).toHaveLength(1);
-  expect(
-    harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
-  ).toBeNull();
+  if (!(destination instanceof TFile)) {
+    throw new TypeError('Expected the retained extraction destination.');
+  }
+  expect(await harness.app.vault.read(destination)).toBe(
+    '# Extract me\n\nbody\n'
+  );
+  expect(trashFile).not.toHaveBeenCalledWith(destination);
   expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
   expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
   expect(harness.openFile).not.toHaveBeenCalled();
   expect(harness.notify).toHaveBeenCalledOnce();
   expect(harness.notify).toHaveBeenCalledWith(
-    'The source note changed; extraction was cancelled.'
+    `The source note changed; extraction was cancelled and the new note was kept: ${IDENTITY_DESTINATION_PATH}`
   );
   return harness;
 }
@@ -402,22 +403,23 @@ async function runFinalGuardIdentityMutation(
 
   await invokeIdentityExtraction(harness);
 
-  const destination = trashFile.mock.calls.find(
-    ([file]) => file.path === IDENTITY_DESTINATION_PATH
-  )?.[0];
+  const destination = harness.app.vault.getAbstractFileByPath(
+    IDENTITY_DESTINATION_PATH
+  );
   expect(destination).toBeInstanceOf(PublicTFile);
-  expect(
-    trashFile.mock.calls.filter(([file]) => file === destination)
-  ).toHaveLength(1);
-  expect(
-    harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
-  ).toBeNull();
+  if (!(destination instanceof TFile)) {
+    throw new TypeError('Expected the retained extraction destination.');
+  }
+  expect(await harness.app.vault.read(destination)).toBe(
+    '# Extract me\n\nbody\n'
+  );
+  expect(trashFile).not.toHaveBeenCalledWith(destination);
   expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
   expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
   expect(harness.openFile).not.toHaveBeenCalled();
   expect(harness.notify).toHaveBeenCalledOnce();
   expect(harness.notify).toHaveBeenCalledWith(
-    'The source note changed; extraction was cancelled.'
+    `The source note changed; extraction was cancelled and the new note was kept: ${IDENTITY_DESTINATION_PATH}`
   );
 }
 
@@ -1309,7 +1311,6 @@ describe('SectionalsPlugin', () => {
     );
     const create = vi.spyOn(app.vault, 'create');
     const read = vi.spyOn(app.vault, 'read');
-    const trashFile = vi.spyOn(app.fileManager, 'trashFile');
     const execute = vi.fn(
       async (
         _editor: SectionEditor,
@@ -1349,7 +1350,7 @@ describe('SectionalsPlugin', () => {
         }
         expect(creation.file).toBe(createdFile);
         expect(await runtime.read(creation.file)).toBe('created');
-        await runtime.delete(creation.file);
+        expect('delete' in runtime).toBe(false);
         return true;
       }
     );
@@ -1401,8 +1402,9 @@ describe('SectionalsPlugin', () => {
       'created'
     );
     expect(read).toHaveBeenCalledWith(expect.any(PublicTFile));
-    expect(trashFile).toHaveBeenCalledWith(expect.any(PublicTFile));
-    expect(app.vault.getAbstractFileByPath('Extracted/created.md')).toBeNull();
+    expect(
+      app.vault.getAbstractFileByPath('Extracted/created.md')
+    ).toBeInstanceOf(PublicTFile);
   });
 
   it('reports a renamed linked file as no longer current through the public vault API', async () => {
@@ -1647,12 +1649,12 @@ describe('SectionalsPlugin', () => {
       expect(harness.openFile).not.toHaveBeenCalled();
       expect(productionTrash).not.toHaveBeenCalled();
       expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
-        `Extraction stopped, but the new note could not be removed: ${IDENTITY_DESTINATION_PATH}`
+        `Extraction stopped because the new note could not be verified; it was kept: ${IDENTITY_DESTINATION_PATH}`
       );
     }
   );
 
-  it('retains a different same-path destination inserted before rollback read', async () => {
+  it('retains a different same-path destination inserted before destination read', async () => {
     const harness = createIdentityHarness();
     const originalCreate = harness.app.vault.create.bind(harness.app.vault);
     const originalDelete = harness.app.vault.delete.bind(harness.app.vault);
@@ -1685,15 +1687,16 @@ describe('SectionalsPlugin', () => {
     expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
     expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
     expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
-      `Extraction stopped, but the new note could not be removed: ${IDENTITY_DESTINATION_PATH}`
+      `Extraction stopped because the new note could not be verified; it was kept: ${IDENTITY_DESTINATION_PATH}`
     );
   });
 
-  it('retains a different same-path destination inserted before rollback delete', async () => {
+  it('does not reach the former destination read-delete boundary after a source change', async () => {
     const harness = createIdentityHarness();
     const originalCreate = harness.app.vault.create.bind(harness.app.vault);
     const originalDelete = harness.app.vault.delete.bind(harness.app.vault);
     const originalRead = harness.app.vault.read.bind(harness.app.vault);
+    const productionTrash = vi.spyOn(harness.app.fileManager, 'trashFile');
     let destinationReadCount = 0;
     let replacement: SourceIdentityFile | undefined;
     vi.spyOn(harness.app.vault, 'read').mockImplementation(async (file) => {
@@ -1719,18 +1722,26 @@ describe('SectionalsPlugin', () => {
 
     await invokeIdentityExtraction(harness);
 
-    expect(
-      harness.app.vault.getAbstractFileByPath(IDENTITY_DESTINATION_PATH)
-    ).toBe(replacement);
+    expect(destinationReadCount).toBe(1);
+    expect(replacement).toBeUndefined();
+    const destination = harness.app.vault.getAbstractFileByPath(
+      IDENTITY_DESTINATION_PATH
+    );
+    expect(destination).toBeInstanceOf(PublicTFile);
+    if (!(destination instanceof TFile)) {
+      throw new TypeError('Expected the retained extraction destination.');
+    }
+    expect(await originalRead(destination)).toBe('# Extract me\n\nbody\n');
+    expect(productionTrash).not.toHaveBeenCalledWith(destination);
     expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
     expect(harness.fixture.editor.getValue()).toBe(IDENTITY_SOURCE);
     expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
-      `Extraction stopped, but the new note could not be removed: ${IDENTITY_DESTINATION_PATH}`
+      `The source note changed; extraction was cancelled and the new note was kept: ${IDENTITY_DESTINATION_PATH}`
     );
   });
 
   it.each(['linked', 'open'] as const)(
-    'cancels and rolls back when the source file is renamed during %s extraction',
+    'cancels and retains the destination when the source file is renamed during %s extraction',
     async (mode) => {
       await runPostCreateIdentityMutation(
         async (harness) => {
@@ -1747,7 +1758,7 @@ describe('SectionalsPlugin', () => {
   );
 
   it.each(['linked', 'open'] as const)(
-    'cancels and rolls back when the source file is deleted during %s extraction',
+    'cancels and retains the destination when the source file is deleted during %s extraction',
     async (mode) => {
       await runPostCreateIdentityMutation(
         async (harness) => {
@@ -1761,7 +1772,7 @@ describe('SectionalsPlugin', () => {
   );
 
   it.each(['linked', 'open'] as const)(
-    'cancels and rolls back when another file replaces the source path during %s extraction',
+    'cancels and retains the destination when another file replaces the source path during %s extraction',
     async (mode) => {
       await runPostCreateIdentityMutation(
         async (harness, originalCreate) => {
@@ -1780,7 +1791,7 @@ describe('SectionalsPlugin', () => {
   );
 
   it.each(['linked', 'open'] as const)(
-    'cancels and rolls back when the command context rebinds to another same-content file during %s extraction',
+    'cancels and retains the destination when the command context rebinds to another same-content file during %s extraction',
     async (mode) => {
       await runPostCreateIdentityMutation(
         (harness) => {
@@ -1794,7 +1805,7 @@ describe('SectionalsPlugin', () => {
   );
 
   it.each(['linked', 'open'] as const)(
-    'cancels and rolls back when the command context rebinds to another same-content editor during %s extraction',
+    'cancels and retains the destination when the command context rebinds to another same-content editor during %s extraction',
     async (mode) => {
       await runPostCreateIdentityMutation(
         (harness) => {
@@ -1807,7 +1818,7 @@ describe('SectionalsPlugin', () => {
     }
   );
 
-  it('cancels and rolls back when an absent context editor becomes present', async () => {
+  it('cancels and retains the destination when an absent context editor becomes present', async () => {
     await runPostCreateIdentityMutation(
       (harness) => {
         harness.view.editor = harness.alternateFixture.editor as Editor;
@@ -1818,7 +1829,7 @@ describe('SectionalsPlugin', () => {
   });
 
   it.each(['linked', 'open'] as const)(
-    'cancels and rolls back when a present context editor becomes absent during %s extraction',
+    'cancels and retains the destination when a present context editor becomes absent during %s extraction',
     async (mode) => {
       await runPostCreateIdentityMutation(
         (harness) => {
@@ -2093,6 +2104,10 @@ describe('SectionalsPlugin', () => {
         'Extraction stopped because the new note changed: Extracted/Topic.md'
       ],
       [
+        { kind: 'destination-unverified', path: 'Extracted/Topic.md' },
+        'Extraction stopped because the new note could not be verified; it was kept: Extracted/Topic.md'
+      ],
+      [
         {
           kind: 'indeterminate-source-mutation',
           path: 'Extracted/Topic.md'
@@ -2108,12 +2123,16 @@ describe('SectionalsPlugin', () => {
         'Extraction stopped because a linked file changed; the new note was kept: Extracted/Topic.md'
       ],
       [
-        { kind: 'rollback-failed', path: 'Extracted/Topic.md' },
-        'Extraction stopped, but the new note could not be removed: Extracted/Topic.md'
+        { kind: 'source-changed-note-kept', path: 'Extracted/Topic.md' },
+        'The source note changed; extraction was cancelled and the new note was kept: Extracted/Topic.md'
       ],
       [
         { kind: 'source-changed' },
         'The source note changed; extraction was cancelled.'
+      ],
+      [
+        { kind: 'source-edit-failed-note-kept', path: 'Extracted/Topic.md' },
+        'Extraction could not update the source; the new note was kept: Extracted/Topic.md'
       ],
       [
         { kind: 'source-edit-failed' },
@@ -2180,6 +2199,9 @@ describe('SectionalsPlugin', () => {
       formatExtractionNotice({ kind: 'destination-changed' });
     }).toThrow(TypeError);
     expect(() => {
+      formatExtractionNotice({ kind: 'destination-unverified' });
+    }).toThrow(TypeError);
+    expect(() => {
       formatExtractionNotice({ kind: 'indeterminate-source-mutation' });
     }).toThrow(TypeError);
     expect(() => {
@@ -2189,7 +2211,10 @@ describe('SectionalsPlugin', () => {
       formatExtractionNotice({ kind: 'relative-link-target-changed' });
     }).toThrow(TypeError);
     expect(() => {
-      formatExtractionNotice({ kind: 'rollback-failed' });
+      formatExtractionNotice({ kind: 'source-changed-note-kept' });
+    }).toThrow(TypeError);
+    expect(() => {
+      formatExtractionNotice({ kind: 'source-edit-failed-note-kept' });
     }).toThrow(TypeError);
   });
 

@@ -39,12 +39,14 @@ export const EXTRACTION_NOTICES = {
   'create-failed': 'Unable to create the extracted note.',
   'cross-boundary-reference': 'The section has a reference or footnote outside its boundaries.',
   'destination-changed': 'Extraction stopped because the new note changed: {path}',
+  'destination-unverified': 'Extraction stopped because the new note could not be verified; it was kept: {path}',
   'indeterminate-source-mutation': 'The source changed unexpectedly; the extracted note was kept: {path}',
   'open-failed': 'The section was extracted, but the new note could not be opened: {path}',
   'relative-link-target-changed': 'Extraction stopped because a linked file changed; the new note was kept: {path}',
-  'rollback-failed': 'Extraction stopped, but the new note could not be removed: {path}',
   'source-changed': 'The source note changed; extraction was cancelled.',
+  'source-changed-note-kept': 'The source note changed; extraction was cancelled and the new note was kept: {path}',
   'source-edit-failed': 'Unable to replace the source section.',
+  'source-edit-failed-note-kept': 'Extraction could not update the source; the new note was kept: {path}',
   'unresolved-relative-link': 'The section contains a relative link or embed that could not be resolved.',
   'unusable-title': 'Rename the heading before extracting it.'
 } as const;
@@ -465,10 +467,6 @@ function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
       } catch {
         return { kind: 'failed' as const };
       }
-    },
-    delete(file): Promise<void> {
-      assertCurrentExtractionFile(app, file);
-      return app.fileManager.trashFile(file);
     },
     fileExists(path): boolean {
       const abstractFile = app.vault.getAbstractFileByPath(normalizePath(path));

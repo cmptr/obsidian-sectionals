@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep created extraction notes when a concurrent change makes automatic cleanup unsafe.
+
 ## 0.2.1
 
 - Respect Obsidian's file deletion preference when rolling back a failed extraction.
