@@ -155,6 +155,11 @@ class StatefulRuntime implements ExtractionRuntime<FakeFile> {
     this.events.push(`getNewFileParent:${filename}`);
     return { path: 'Extracted' };
   });
+  readonly isCurrentFile = vi.fn((file: FakeFile, expectedNormalizedPath: string) => {
+    this.events.push(`target-check:${expectedNormalizedPath}:${String(file.id)}`);
+    return file.path === expectedNormalizedPath
+      && this.files.get(expectedNormalizedPath)?.file === file;
+  });
   readonly read = vi.fn(async (file: FakeFile) => {
     this.events.push(`read:${file.path}:${String(file.id)}`);
     const entry = this.files.get(file.path);
@@ -358,6 +363,61 @@ describe('executeSectionExtraction success', () => {
       'setCursor'
     ]);
     expect(runtime.delete).not.toHaveBeenCalled();
+    expect(runtime.isCurrentFile).not.toHaveBeenCalled();
+  });
+
+  it('revalidates a resolved target after each await and immediately before mutation', async () => {
+    const events: string[] = [];
+    const source = '# Beta\n[Target](../Assets/Target.md)\n';
+    const editor = new StatefulEditor(source, source.indexOf('[Target]'), events);
+    const runtime = new StatefulRuntime(events);
+    const target = runtime.storeCreatedFile('Assets/Target.md', 'target');
+    runtime.resolveLink.mockReturnValue(target);
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Projects/Source.md',
+        { mode: 'linked' },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([]);
+    const creationIndex = events.indexOf('create:Extracted/Beta.md');
+    const firstTargetCheckIndex = events.indexOf('target-check:Assets/Target.md:1');
+    const destinationReadIndex = events.indexOf('read:Extracted/Beta.md:2');
+    const secondTargetCheckIndex = events.indexOf(
+      'target-check:Assets/Target.md:1',
+      firstTargetCheckIndex + 1
+    );
+    const replacementIndex = events.indexOf('replaceRange');
+    const finalTargetCheckIndex = events.lastIndexOf(
+      'target-check:Assets/Target.md:1',
+      replacementIndex
+    );
+    const finalSourceCheckIndex = events.lastIndexOf('getValue', finalTargetCheckIndex);
+    const sourceInspectionIndex = events.indexOf('getValue', replacementIndex + 1);
+    const orderedEvents = [
+      creationIndex,
+      firstTargetCheckIndex,
+      destinationReadIndex,
+      secondTargetCheckIndex,
+      finalSourceCheckIndex,
+      finalTargetCheckIndex,
+      replacementIndex,
+      sourceInspectionIndex
+    ];
+    expect(orderedEvents.every((index) => index >= 0)).toBe(true);
+    expect(
+      orderedEvents.every((index, position) => {
+        const previousIndex = orderedEvents[position - 1];
+        return previousIndex === undefined || index > previousIndex;
+      })
+    ).toBe(true);
+    expect(runtime.isCurrentFile).toHaveBeenCalledTimes(3);
   });
 
   it('executes open mode only after inspecting the exact source commit', async () => {
@@ -401,6 +461,199 @@ describe('executeSectionExtraction success', () => {
     expect(replacementIndex).toBeGreaterThanOrEqual(0);
     expect(commitInspectionIndex).toBeGreaterThan(replacementIndex);
     expect(openingIndex).toBeGreaterThan(commitInspectionIndex);
+  });
+});
+
+describe('executeSectionExtraction relative target races', () => {
+  const source = '# Beta\n[Target](../Assets/Target.md)\n';
+  const destinationPath = 'Extracted/Beta.md';
+
+  it('retains the destination when a resolved target is renamed during creation', async () => {
+    const editor = new StatefulEditor(source, source.indexOf('[Target]'));
+    const runtime = new StatefulRuntime();
+    const target = runtime.storeCreatedFile('Assets/Target.md', 'target');
+    runtime.resolveLink.mockReturnValue(target);
+    runtime.create.mockImplementationOnce(async (path, content) => {
+      runtime.events.push(`create:${path}`);
+      const destination = runtime.storeCreatedFile(path, content);
+      runtime.files.delete('Assets/Target.md');
+      target.path = 'Archive/Target.md';
+      runtime.files.set(target.path, { content: 'target', file: target });
+      return createdCreateResult(destination);
+    });
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Projects/Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe(source);
+    expect(runtime.files.has(destinationPath)).toBe(true);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([
+      { kind: 'relative-link-target-changed', path: destinationPath }
+    ]);
+  });
+
+  it('retains the destination when a resolved target is replaced at the same path during creation', async () => {
+    const editor = new StatefulEditor(source, source.indexOf('[Target]'));
+    const runtime = new StatefulRuntime();
+    const target = runtime.storeCreatedFile('Assets/Target.md', 'target');
+    runtime.resolveLink.mockReturnValue(target);
+    runtime.create.mockImplementationOnce(async (path, content) => {
+      runtime.events.push(`create:${path}`);
+      const destination = runtime.storeCreatedFile(path, content);
+      runtime.files.set('Assets/Target.md', {
+        content: 'replacement',
+        file: new FakeFile(999, 'Target', 'Assets/Target.md')
+      });
+      return createdCreateResult(destination);
+    });
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Projects/Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe(source);
+    expect(runtime.files.has(destinationPath)).toBe(true);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([
+      { kind: 'relative-link-target-changed', path: destinationPath }
+    ]);
+  });
+
+  it('retains the destination when a resolved target changes during destination readback', async () => {
+    const editor = new StatefulEditor(source, source.indexOf('[Target]'));
+    const runtime = new StatefulRuntime();
+    const target = runtime.storeCreatedFile('Assets/Target.md', 'target');
+    runtime.resolveLink.mockReturnValue(target);
+    runtime.afterRead = (file): void => {
+      if (file.path !== destinationPath) {
+        return;
+      }
+      runtime.files.delete('Assets/Target.md');
+      target.path = 'Archive/Target.md';
+      runtime.files.set(target.path, { content: 'target', file: target });
+    };
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Projects/Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe(source);
+    expect(runtime.files.has(destinationPath)).toBe(true);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([
+      { kind: 'relative-link-target-changed', path: destinationPath }
+    ]);
+  });
+
+  it('treats a thrown target identity check as a retained target change', async () => {
+    const editor = new StatefulEditor(source, source.indexOf('[Target]'));
+    const runtime = new StatefulRuntime();
+    const target = runtime.storeCreatedFile('Assets/Target.md', 'target');
+    runtime.resolveLink.mockReturnValue(target);
+    runtime.isCurrentFile.mockImplementationOnce(() => {
+      throw new Error('identity check failed');
+    });
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Projects/Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe(source);
+    expect(runtime.files.has(destinationPath)).toBe(true);
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([
+      { kind: 'relative-link-target-changed', path: destinationPath }
+    ]);
+  });
+
+  it('retains the destination when one of several resolved targets changes', async () => {
+    const multiTargetSource = '# Beta\n[First](../Assets/First.md)\n[Second](../Assets/Second.md)\n';
+    const editor = new StatefulEditor(
+      multiTargetSource,
+      multiTargetSource.indexOf('[First]')
+    );
+    const runtime = new StatefulRuntime();
+    const firstTarget = runtime.storeCreatedFile('Assets/First.md', 'first');
+    const secondTarget = runtime.storeCreatedFile('Assets/Second.md', 'second');
+    runtime.resolveLink.mockImplementation((linkpath) => linkpath.includes('First')
+      ? firstTarget
+      : secondTarget);
+    runtime.afterRead = (file): void => {
+      if (file.path !== destinationPath) {
+        return;
+      }
+      runtime.files.set('Assets/Second.md', {
+        content: 'replacement',
+        file: new FakeFile(999, 'Second', 'Assets/Second.md')
+      });
+    };
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Projects/Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(editor.currentSource()).toBe(multiTargetSource);
+    expect(runtime.files.has(destinationPath)).toBe(true);
+    expect(runtime.isCurrentFile).toHaveBeenCalledWith(
+      firstTarget,
+      'Assets/First.md'
+    );
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(notices).toEqual([
+      { kind: 'relative-link-target-changed', path: destinationPath }
+    ]);
   });
 });
 
@@ -757,6 +1010,8 @@ describe('executeSectionExtraction collision races', () => {
     const runtime = new StatefulRuntime();
     const firstTarget = new FakeFile(100, 'First', 'Assets/First.png');
     const retriedTarget = new FakeFile(101, 'Photo', 'Assets/Photo.png');
+    runtime.files.set(firstTarget.path, { content: 'first', file: firstTarget });
+    runtime.files.set(retriedTarget.path, { content: 'photo', file: retriedTarget });
     runtime.createResults.push({ kind: 'collision' });
     runtime.getNewFileParent.mockImplementation((_sourcePath, filename) => {
       runtime.events.push(`getNewFileParent:${filename}`);

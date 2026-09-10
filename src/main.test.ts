@@ -1405,6 +1405,64 @@ describe('SectionalsPlugin', () => {
     expect(app.vault.getAbstractFileByPath('Extracted/created.md')).toBeNull();
   });
 
+  it('reports a renamed linked file as no longer current through the public vault API', async () => {
+    const app = ObsidianApp.createConfigured__({
+      files: {
+        'Folder/source.md': '# Extract me\nbody\n',
+        'Links/target.md': 'target'
+      }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    const targetFile = app.vault.getAbstractFileByPath('Links/target.md');
+    if (
+      !(sourceFile instanceof PublicTFile)
+      || !(sourceFile instanceof TFile)
+      || !(targetFile instanceof PublicTFile)
+      || !(targetFile instanceof TFile)
+    ) {
+      throw new TypeError('Expected the linked-file rename fixtures.');
+    }
+    const runtime = await captureExtractionRuntime(asApp(app), sourceFile);
+
+    expect(runtime.isCurrentFile(targetFile, 'Links//target.md')).toBe(true);
+    await app.vault.rename(targetFile, 'Archive/target.md');
+
+    expect(runtime.isCurrentFile(targetFile, 'Links/target.md')).toBe(false);
+  });
+
+  it('reports a same-path linked file replacement as a different identity', async () => {
+    const app = ObsidianApp.createConfigured__({
+      files: {
+        'Folder/source.md': '# Extract me\nbody\n',
+        'Links/target.md': 'target'
+      }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    const targetFile = app.vault.getAbstractFileByPath('Links/target.md');
+    if (
+      !(sourceFile instanceof PublicTFile)
+      || !(sourceFile instanceof TFile)
+      || !(targetFile instanceof PublicTFile)
+      || !(targetFile instanceof TFile)
+    ) {
+      throw new TypeError('Expected the linked-file replacement fixtures.');
+    }
+    const runtime = await captureExtractionRuntime(asApp(app), sourceFile);
+
+    await app.fileManager.trashFile(targetFile);
+    const replacement = await app.vault.create('Links/target.md', 'replacement');
+    if (
+      !(replacement instanceof PublicTFile)
+      || !(replacement instanceof TFile)
+    ) {
+      throw new TypeError('Expected the concrete linked-file replacement.');
+    }
+
+    expect(replacement).not.toBe(targetFile);
+    expect(runtime.isCurrentFile(targetFile, 'Links/target.md')).toBe(false);
+    expect(runtime.isCurrentFile(replacement, 'Links/target.md')).toBe(true);
+  });
+
   it.each([
     ['collision-like Error', new Error('File already exists')],
     ['generic Error', new Error('Permission denied')],
@@ -2046,6 +2104,10 @@ describe('SectionalsPlugin', () => {
         'The section was extracted, but the new note could not be opened: Extracted/Topic.md'
       ],
       [
+        { kind: 'relative-link-target-changed', path: 'Extracted/Topic.md' },
+        'Extraction stopped because a linked file changed; the new note was kept: Extracted/Topic.md'
+      ],
+      [
         { kind: 'rollback-failed', path: 'Extracted/Topic.md' },
         'Extraction stopped, but the new note could not be removed: Extracted/Topic.md'
       ],
@@ -2122,6 +2184,9 @@ describe('SectionalsPlugin', () => {
     }).toThrow(TypeError);
     expect(() => {
       formatExtractionNotice({ kind: 'open-failed' });
+    }).toThrow(TypeError);
+    expect(() => {
+      formatExtractionNotice({ kind: 'relative-link-target-changed' });
     }).toThrow(TypeError);
     expect(() => {
       formatExtractionNotice({ kind: 'rollback-failed' });

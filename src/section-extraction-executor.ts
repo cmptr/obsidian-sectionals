@@ -82,6 +82,8 @@ export interface ExtractionRuntime<File extends ExtractionFile> {
     candidateFilename: string
   ) => DestinationFolder;
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
+  readonly isCurrentFile: (file: File, expectedNormalizedPath: string) => boolean;
+  // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
   readonly read: (file: File) => Promise<string>;
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
   readonly resolveLink: (
@@ -96,6 +98,7 @@ export type ExtractionNotice =
   | 'destination-changed'
   | 'indeterminate-source-mutation'
   | 'open-failed'
+  | 'relative-link-target-changed'
   | 'rollback-failed'
   | 'source-changed'
   | 'source-edit-failed'
@@ -196,6 +199,10 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
     notify(creation.notice);
     return true;
   }
+  if (!areResolvedTargetsCurrent(runtime, creation)) {
+    notify(createRelativeTargetChangedNotice(creation.intendedPath));
+    return true;
+  }
   if (!doesCreatedDestinationMatch(creation)) {
     notify(createDestinationChangedNotice(creation.intendedPath));
     return true;
@@ -251,7 +258,15 @@ export async function executeSectionExtraction<File extends ExtractionFile>(
   try {
     destinationContent = await runtime.read(creation.file);
   } catch {
-    notify(createRollbackFailedNotice(creation.intendedPath));
+    notify(
+      areResolvedTargetsCurrent(runtime, creation)
+        ? createRollbackFailedNotice(creation.intendedPath)
+        : createRelativeTargetChangedNotice(creation.intendedPath)
+    );
+    return true;
+  }
+  if (!areResolvedTargetsCurrent(runtime, creation)) {
+    notify(createRelativeTargetChangedNotice(creation.intendedPath));
     return true;
   }
   if (!doesCreatedDestinationMatch(creation)) {
@@ -420,17 +435,18 @@ function commitSourceExtraction<File extends ExtractionFile>(
     return createCommitDestinationChanged(creation.intendedPath);
   }
 
+  const expectedSource = originalSource.slice(0, edit.range.from)
+    + edit.replacement
+    + originalSource.slice(edit.range.to);
   const finalSourceFailure = getSourceSnapshotFailure(editor, originalSource);
   if (finalSourceFailure !== null) {
     return { kind: 'rollback', notice: finalSourceFailure };
   }
-  if (!doesCreatedDestinationMatch(creation)) {
-    return createCommitDestinationChanged(creation.intendedPath);
+  const destinationFailure = getCommitDestinationFailure(runtime, creation);
+  if (destinationFailure !== null) {
+    return destinationFailure;
   }
 
-  const expectedSource = originalSource.slice(0, edit.range.from)
-    + edit.replacement
-    + originalSource.slice(edit.range.to);
   let didReplacementThrow = false;
   try {
     editor.replaceRange(edit.replacement, from, to);
@@ -567,8 +583,25 @@ async function createDestination<File extends ExtractionFile>(
   }
 }
 
+function areResolvedTargetsCurrent<File extends ExtractionFile>(
+  runtime: ExtractionRuntime<File>,
+  creation: CreatedDestination<File>
+): boolean {
+  try {
+    return creation.preparation.resolvedRelativeTargets.every(
+      ({ file, normalizedPath }) => runtime.isCurrentFile(file, normalizedPath)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function createCommitDestinationChanged(path: string): CommitNoticeResult {
   return { kind: 'notice', notice: createDestinationChangedNotice(path) };
+}
+
+function createCommitRelativeTargetChanged(path: string): CommitNoticeResult {
+  return { kind: 'notice', notice: createRelativeTargetChangedNotice(path) };
 }
 
 function createDestinationChangedNotice(
@@ -582,6 +615,24 @@ function createIndeterminateCommitNotice(path: string): CommitNoticeResult {
     kind: 'notice',
     notice: { kind: 'indeterminate-source-mutation', path }
   };
+}
+
+function getCommitDestinationFailure<File extends ExtractionFile>(
+  runtime: ExtractionRuntime<File>,
+  creation: CreatedDestination<File>
+): CommitNoticeResult | null {
+  if (!doesCreatedDestinationMatch(creation)) {
+    return createCommitDestinationChanged(creation.intendedPath);
+  }
+  return areResolvedTargetsCurrent(runtime, creation)
+    ? null
+    : createCommitRelativeTargetChanged(creation.intendedPath);
+}
+
+function createRelativeTargetChangedNotice(
+  path: string
+): ExtractionNoticeDetails {
+  return { kind: 'relative-link-target-changed', path };
 }
 
 function createRollbackFailedNotice(path: string): RollbackFailureNotice {

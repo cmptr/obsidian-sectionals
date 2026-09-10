@@ -41,6 +41,7 @@ export const EXTRACTION_NOTICES = {
   'destination-changed': 'Extraction stopped because the new note changed: {path}',
   'indeterminate-source-mutation': 'The source changed unexpectedly; the extracted note was kept: {path}',
   'open-failed': 'The section was extracted, but the new note could not be opened: {path}',
+  'relative-link-target-changed': 'Extraction stopped because a linked file changed; the new note was kept: {path}',
   'rollback-failed': 'Extraction stopped, but the new note could not be removed: {path}',
   'source-changed': 'The source note changed; extraction was cancelled.',
   'source-edit-failed': 'Unable to replace the source section.',
@@ -495,6 +496,11 @@ function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
         throw new TypeError('Expected the new-file parent to be a folder.');
       }
       return parent;
+    },
+    isCurrentFile(file, expectedPath): boolean {
+      const normalizedExpectedPath = normalizePath(expectedPath);
+      return normalizePath(file.path) === normalizedExpectedPath
+        && app.vault.getAbstractFileByPath(normalizedExpectedPath) === file;
     },
     async read(file): Promise<string> {
       assertCurrentExtractionFile(app, file);
