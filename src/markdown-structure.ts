@@ -87,6 +87,46 @@ const MAX_MARKDOWN_INDENTATION_SPACES = 3;
 const PERCENT_COMMENT_DELIMITER = '%%';
 const SETEXT_HEADING_LEVEL_ONE: HeadingLevel = 1;
 
+export function excludeOffsetsInRanges(
+  orderedOffsets: readonly number[],
+  ranges: readonly MarkdownRange[]
+): readonly number[] {
+  const sortedRanges = ranges
+    .map((range) => ({ from: range.from, to: range.to }))
+    .sort(
+      (left, right) => left.from - right.from || left.to - right.to
+    );
+  const mergedRanges: MarkdownRange[] = [];
+  for (const range of sortedRanges) {
+    const previous = mergedRanges.at(-1);
+    if (previous === undefined || range.from > previous.to) {
+      mergedRanges.push(range);
+    } else if (range.to > previous.to) {
+      mergedRanges[mergedRanges.length - 1] = {
+        from: previous.from,
+        to: range.to
+      };
+    }
+  }
+
+  const outsideOffsets: number[] = [];
+  let rangeIndex = 0;
+  for (const offset of orderedOffsets) {
+    while (rangeIndex < mergedRanges.length) {
+      const currentRange = mergedRanges[rangeIndex];
+      if (currentRange === undefined || currentRange.to > offset) {
+        break;
+      }
+      rangeIndex += 1;
+    }
+    const range = mergedRanges[rangeIndex];
+    if (range === undefined || offset < range.from) {
+      outsideOffsets.push(offset);
+    }
+  }
+  return outsideOffsets;
+}
+
 export function parseMarkdownStructure(source: string): MarkdownStructure {
   const root: MarkdownContainer = {
     depth: 0,
@@ -236,22 +276,25 @@ function findPercentCommentRanges(
   source: string,
   delimiterIgnoredRanges: readonly MarkdownRange[]
 ): MarkdownRange[] {
-  const ranges: MarkdownRange[] = [];
-  let open: null | number = null;
+  const delimiterOffsets: number[] = [];
   let searchFrom = 0;
-
   while (searchFrom < source.length) {
     const delimiter = source.indexOf(PERCENT_COMMENT_DELIMITER, searchFrom);
     if (delimiter === -1) {
       break;
     }
+    delimiterOffsets.push(delimiter);
     searchFrom = delimiter + PERCENT_COMMENT_DELIMITER.length;
-    if (
-      delimiterIgnoredRanges.some((range) => containsOffset(range, delimiter))
-    ) {
-      continue;
-    }
+  }
 
+  const ranges: MarkdownRange[] = [];
+  let open: null | number = null;
+  for (
+    const delimiter of excludeOffsetsInRanges(
+      delimiterOffsets,
+      delimiterIgnoredRanges
+    )
+  ) {
     if (open === null) {
       open = delimiter;
     } else {

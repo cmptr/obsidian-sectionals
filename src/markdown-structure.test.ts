@@ -1,7 +1,10 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 
-import { parseMarkdownStructure } from './markdown-structure.ts';
+import type { MarkdownRange } from './markdown-structure.ts';
+
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structure imports compact.
+import { excludeOffsetsInRanges, parseMarkdownStructure } from './markdown-structure.ts';
 
 describe('parseMarkdownStructure', () => {
   it('returns ATX and Setext headings in source order', () => {
@@ -336,4 +339,128 @@ describe('parseMarkdownStructure', () => {
       ).toEqual([1]);
     }
   );
+
+  it('preserves fenced, HTML, and Obsidian comment structure boundaries', () => {
+    const source = [
+      '# before',
+      '```md',
+      '%%',
+      '# fenced',
+      '> fenced quote',
+      '%%',
+      '```',
+      '<!-- %%',
+      '# html',
+      '> html quote',
+      '%% -->',
+      '%%',
+      '# obsidian',
+      '> obsidian quote',
+      '```',
+      'obsidian code',
+      '```',
+      '%%',
+      '# after',
+      ''
+    ].join('\n');
+    const structure = parseMarkdownStructure(source);
+
+    expect(
+      structure.headings.map(({ level, lineStart }) => ({ level, lineStart }))
+    ).toEqual([
+      { level: 1, lineStart: 0 },
+      { level: 1, lineStart: source.indexOf('# after') }
+    ]);
+    expect(structure.blocks).toEqual([
+      {
+        depth: 0,
+        end: source.indexOf('<!--'),
+        kind: 'fenced-code',
+        start: source.indexOf('```md')
+      }
+    ]);
+    expect(structure.protectedRanges).toEqual([
+      {
+        from: source.indexOf('<!--'),
+        to: source.indexOf('-->') + '-->'.length
+      },
+      {
+        from: source.indexOf('%%', source.indexOf('-->') + '-->'.length),
+        to: source.lastIndexOf('%%') + '%%'.length
+      }
+    ]);
+  });
+
+  it('protects headings and blocks through EOF for an unclosed Obsidian comment', () => {
+    const source = '# visible\n%%\n## hidden\n> hidden quote\n```\nhidden\n```\n';
+    const commentStart = source.indexOf('%%');
+    const structure = parseMarkdownStructure(source);
+
+    expect(
+      structure.headings.map(({ level, lineStart }) => ({ level, lineStart }))
+    ).toEqual([{ level: 1, lineStart: 0 }]);
+    expect(structure.blocks).toEqual([]);
+    expect(structure.protectedRanges).toEqual([
+      { from: commentStart, to: source.length }
+    ]);
+  });
+});
+
+describe('excludeOffsetsInRanges', () => {
+  it('uses half-open boundaries while merging nested, overlapping, and touching ranges', () => {
+    const orderedOffsets = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const ranges = [
+      { from: 9, to: 10 },
+      { from: 4, to: 6 },
+      { from: 1, to: 3 },
+      { from: 3, to: 7 },
+      { from: 2, to: 5 }
+    ];
+
+    expect(excludeOffsetsInRanges(orderedOffsets, ranges)).toEqual([
+      0,
+      7,
+      8,
+      10
+    ]);
+    expect(orderedOffsets).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(ranges).toEqual(
+      [
+        { from: 9, to: 10 },
+        { from: 4, to: 6 },
+        { from: 1, to: 3 },
+        { from: 3, to: 7 },
+        { from: 2, to: 5 }
+      ] satisfies readonly MarkdownRange[]
+    );
+  });
+
+  it('keeps range reads linear for ordered delimiter offsets', () => {
+    const itemCount = 1000;
+    let reads = 0;
+    const ranges = Array.from(
+      { length: itemCount },
+      (_, index): MarkdownRange => ({
+        get from(): number {
+          reads += 1;
+          return index * 2;
+        },
+        get to(): number {
+          reads += 1;
+          return index * 2 + 1;
+        }
+      })
+    );
+    const orderedOffsets = Array.from(
+      { length: itemCount },
+      (_, index) => index * 2 + 1
+    );
+
+    expect(excludeOffsetsInRanges(orderedOffsets, ranges)).toEqual(
+      orderedOffsets
+    );
+    expect(reads).toBeLessThanOrEqual(
+      8 * (orderedOffsets.length + ranges.length)
+    );
+  });
 });
