@@ -9,6 +9,7 @@
   "main": "dist/main.js",
   "packageManager": "pnpm@10.20.0",
   "scripts": {
+    "benchmark:planning": "jiti scripts/structural-planning-performance.ts",
     "build": "jiti scripts/build.ts",
     "build:compile": "pnpm typecheck",
     "dev": "jiti scripts/dev.ts",
