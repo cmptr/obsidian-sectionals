@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add commands to promote or demote complete section hierarchies and repeat those changes.
 - Keep created extraction notes when a concurrent change makes automatic cleanup unsafe.
 
 ## 0.2.1

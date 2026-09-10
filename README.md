@@ -18,8 +18,9 @@ Sectionals treats Markdown structures as complete editing units:
 
 - **Delete** a section, heading block, code block, callout, or blockquote.
 - **Move** a section earlier or later among its siblings.
+- **Promote or demote** a complete section hierarchy.
 - **Extract** a section into a note of its own.
-- **Repeat** the last successful section movement somewhere else.
+- **Repeat** the last successful movement or hierarchy change somewhere else.
 
 Open the command palette and search for **Sectionals** to see the available actions. Commands have no default hotkeys, but you can assign your own under **Settings → Hotkeys**.
 
@@ -42,15 +43,26 @@ Every deletion is one undoable edit.
 
 ### Move
 
-| Command                           | Result                                               |
-| --------------------------------- | ---------------------------------------------------- |
-| **Move current section up**       | Moves the section one place earlier.                 |
-| **Move current section down**     | Moves the section one place later.                   |
-| **Move current section to start** | Moves the section to the start of its sibling group. |
-| **Move current section to end**   | Moves the section to the end of its sibling group.   |
-| **Repeat last structural action** | Runs the last successful movement again.             |
+| Command                           | Result                                                       |
+| --------------------------------- | ------------------------------------------------------------ |
+| **Move current section up**       | Moves the section one place earlier.                         |
+| **Move current section down**     | Moves the section one place later.                           |
+| **Move current section to start** | Moves the section to the start of its sibling group.         |
+| **Move current section to end**   | Moves the section to the end of its sibling group.           |
+| **Repeat last structural action** | Runs the last successful movement or hierarchy change again. |
 
-Movement carries the complete section, including its nested subsections. The cursor follows the moved text. Repeat works across notes for the rest of the current Obsidian session.
+Movement carries the complete section, including its nested subsections. The cursor follows the moved text.
+
+### Hierarchy
+
+| Command                     | Result                                                     |
+| --------------------------- | ---------------------------------------------------------- |
+| **Promote current section** | Promotes the section and its nested subsections one level. |
+| **Demote current section**  | Demotes the section and its nested subsections one level.  |
+
+Promotion and demotion shift the complete section, including every nested subsection. Actions are unavailable at invalid boundaries, including promoting an H1, demoting a subtree containing an H6, or demoting without a preceding sibling.
+
+**Repeat last structural action** remembers the last successful movement or hierarchy change and can replay it across notes for the rest of the current Obsidian session.
 
 ### Extract
 
@@ -67,7 +79,7 @@ Sectionals extracts the deepest eligible section. It does not substitute a large
 
 Relative Markdown links and embeds continue pointing to the same files after extraction. Sectionals leaves the source note unchanged if it cannot safely resolve a link, reference, or footnote shared with text outside the section.
 
-Links elsewhere in the vault to headings or block IDs inside the extracted section are not updated. Extraction also does not replace the movement remembered by **Repeat last structural action**.
+Links elsewhere in the vault to headings or block IDs inside the extracted section are not updated. Extraction also does not replace the movement or hierarchy change remembered by **Repeat last structural action**.
 
 > [!warning] Undo after extraction
 > Undo puts the section back in the source note, but it does not delete the note Sectionals created. If the new note cannot be opened, the source section stays removed and Sectionals tells you where it created the note. When extraction is cancelled after creating a note, Sectionals retains that note and reports its path rather than risking deletion of changed content.
