@@ -1,5 +1,9 @@
 import { deepStrictEqual } from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Node imports compact.
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -12,6 +16,17 @@ const PNPM_SETUP_REFERENCE = 'pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae53
 const UPLOAD_ARTIFACT_REFERENCE = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02';
 const FULL_ACTION_SHA = /@[0-9a-f]{40}$/u;
 const SECRET_INTERPOLATION = /\$\{\{\s*secrets(?:\.|\[)/iu;
+const VALID_MAIN_DIGEST = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const VALID_MANIFEST_DIGEST = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const OTHER_VALID_DIGEST = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+const MATCHING_SHA256SUM = [
+  'case "$1" in',
+  `  dist/main.js) digest='${VALID_MAIN_DIGEST}' ;;`,
+  `  dist/manifest.json) digest='${VALID_MANIFEST_DIGEST}' ;;`,
+  '  *) exit 74 ;;',
+  'esac',
+  String.raw`printf '%s  %s\n' "$digest" "$1"`
+].join('\n');
 const RELEASE_COMMANDS = [
   /\bgit\s+(?:push|tag)\b/iu,
   /\bgh\s+release\b/iu,
@@ -99,8 +114,14 @@ jobs:
       - name: Calculate release asset hashes
         id: hashes
         run: |
-          printf 'main=%s\\n' "$(sha256sum dist/main.js | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-          printf 'manifest=%s\\n' "$(sha256sum dist/manifest.json | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          test -f dist/main.js
+          test -f dist/manifest.json
+          main_sha256="$(sha256sum dist/main.js | cut -d ' ' -f 1)"
+          manifest_sha256="$(sha256sum dist/manifest.json | cut -d ' ' -f 1)"
+          [[ "$main_sha256" =~ ^[[:xdigit:]]{64}$ ]]
+          [[ "$manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]
+          printf 'main=%s\\n' "$main_sha256" >> "$GITHUB_OUTPUT"
+          printf 'manifest=%s\\n' "$manifest_sha256" >> "$GITHUB_OUTPUT"
       - name: Upload release assets
         uses: ${UPLOAD_ARTIFACT_REFERENCE}
         with:
@@ -130,8 +151,16 @@ jobs:
           EXPECTED_MAIN_SHA256: \${{ needs.build.outputs.main-sha256 }}
           EXPECTED_MANIFEST_SHA256: \${{ needs.build.outputs.manifest-sha256 }}
         run: |
-          test "$(sha256sum dist/main.js | cut -d ' ' -f 1)" = "$EXPECTED_MAIN_SHA256"
-          test "$(sha256sum dist/manifest.json | cut -d ' ' -f 1)" = "$EXPECTED_MANIFEST_SHA256"
+          test -f dist/main.js
+          test -f dist/manifest.json
+          [[ "$EXPECTED_MAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
+          [[ "$EXPECTED_MANIFEST_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
+          actual_main_sha256="$(sha256sum dist/main.js | cut -d ' ' -f 1)"
+          actual_manifest_sha256="$(sha256sum dist/manifest.json | cut -d ' ' -f 1)"
+          [[ "$actual_main_sha256" =~ ^[[:xdigit:]]{64}$ ]]
+          [[ "$actual_manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]
+          test "$actual_main_sha256" = "$EXPECTED_MAIN_SHA256"
+          test "$actual_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"
       - name: Attest main.js provenance
         uses: ${ATTEST_REFERENCE}
         with:
@@ -152,6 +181,24 @@ jobs:
             dist/manifest.json
 `;
 const EXPECTED_RELEASE_WORKFLOW: unknown = parse(EXPECTED_RELEASE_WORKFLOW_SOURCE);
+const EXECUTABLE_FILE_MODE = 0o755;
+const SHA256_HEX_LENGTH = 64;
+
+type FixtureEntry = 'directory' | 'file';
+
+interface ShellFixtureOptions {
+  readonly expectedMain?: string;
+  readonly expectedManifest?: string;
+  readonly main?: FixtureEntry;
+  readonly manifest?: FixtureEntry;
+  readonly sha256sum?: string;
+}
+
+interface ShellResult {
+  readonly githubOutput: string;
+  readonly hashLog: string;
+  readonly status: null | number;
+}
 
 function assertNoWritePermissions(value: unknown, path: string): void {
   if (value === 'write-all') {
@@ -241,8 +288,38 @@ function assertWorkflowContract(source: string): void {
   deepStrictEqual(parsed, EXPECTED_WORKFLOW);
 }
 
+function getStepRun(source: string, jobName: string, stepName: string): string {
+  const parsed: unknown = parse(source);
+  const jobs = isRecord(parsed) ? parsed['jobs'] : undefined;
+  const job = isRecord(jobs) ? jobs[jobName] : undefined;
+  const steps = isRecord(job) ? job['steps'] : undefined;
+
+  if (!Array.isArray(steps)) {
+    throw new TypeError(`Workflow job ${jobName} has no steps.`);
+  }
+
+  const safeSteps: readonly unknown[] = steps;
+  const step = safeSteps.find((candidate) => isRecord(candidate) && candidate['name'] === stepName);
+  const run = isRecord(step) ? step['run'] : undefined;
+
+  if (typeof run !== 'string') {
+    throw new TypeError(`Workflow step ${jobName}.${stepName} has no shell script.`);
+  }
+
+  return run;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function materializeFixtureEntry(path: string, entry: FixtureEntry, contents: string): void {
+  if (entry === 'directory') {
+    mkdirSync(path);
+    return;
+  }
+
+  writeFileSync(path, contents);
 }
 
 function replaceExactlyOnce(source: string, search: string, replacement: string): string {
@@ -258,6 +335,59 @@ function replaceExactlyOnce(source: string, search: string, replacement: string)
   }
 
   return `${source.slice(0, firstIndex)}${replacement}${source.slice(firstIndex + search.length)}`;
+}
+
+function runWorkflowShell(script: string, options: ShellFixtureOptions = {}): ShellResult {
+  const root = mkdtempSync(join(tmpdir(), 'sectionals-workflow-'));
+
+  try {
+    const dist = join(root, 'dist');
+    const githubOutput = join(root, 'github-output');
+    const hashLog = join(root, 'hash-log');
+
+    mkdirSync(dist);
+    materializeFixtureEntry(join(dist, 'main.js'), options.main ?? 'file', 'main\n');
+    materializeFixtureEntry(join(dist, 'manifest.json'), options.manifest ?? 'file', '{}\n');
+    writeFileSync(githubOutput, '');
+    writeFileSync(hashLog, '');
+
+    let path = process.env['PATH'] ?? '';
+
+    if (options.sha256sum !== undefined) {
+      const bin = join(root, 'bin');
+      const executable = join(bin, 'sha256sum');
+
+      mkdirSync(bin);
+      writeFileSync(executable, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$HASH_LOG"\n${options.sha256sum}\n`);
+      chmodSync(executable, EXECUTABLE_FILE_MODE);
+      path = `${bin}:${path}`;
+    }
+
+    const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script], {
+      cwd: root,
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        EXPECTED_MAIN_SHA256: options.expectedMain ?? '',
+        EXPECTED_MANIFEST_SHA256: options.expectedManifest ?? '',
+        GITHUB_OUTPUT: githubOutput,
+        HASH_LOG: hashLog,
+        PATH: path
+      }
+    });
+
+    if (result.error !== undefined) {
+      throw result.error;
+    }
+
+    return {
+      githubOutput: readFileSync(githubOutput, 'utf-8'),
+      hashLog: readFileSync(hashLog, 'utf-8'),
+      status: result.status
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 const releaseWorkflow = readFileSync('.github/workflows/release.yml', 'utf-8');
@@ -329,6 +459,168 @@ describe('release workflow privilege boundary', () => {
     expect(() => {
       assertReleaseWorkflowContract(mutated);
     }).toThrow();
+  });
+
+  it('rejects removal of the pre-upload regular-file boundary', () => {
+    const mutated = replaceExactlyOnce(
+      EXPECTED_RELEASE_WORKFLOW_SOURCE,
+      '      - name: Calculate release asset hashes\n        id: hashes\n        run: |\n'
+        + '          test -f dist/main.js\n          test -f dist/manifest.json\n',
+      '      - name: Calculate release asset hashes\n        id: hashes\n        run: |\n'
+    );
+
+    expect(() => {
+      assertReleaseWorkflowContract(mutated);
+    }).toThrow();
+  });
+
+  it('rejects removal of the post-download regular-file boundary', () => {
+    const mutated = replaceExactlyOnce(
+      EXPECTED_RELEASE_WORKFLOW_SOURCE,
+      '        run: |\n          test -f dist/main.js\n          test -f dist/manifest.json\n'
+        + '          [[ "$EXPECTED_MAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]\n',
+      '        run: |\n          [[ "$EXPECTED_MAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]\n'
+    );
+
+    expect(() => {
+      assertReleaseWorkflowContract(mutated);
+    }).toThrow();
+  });
+
+  it('rejects hashing nested inside successful output commands', () => {
+    const mutated = replaceExactlyOnce(
+      EXPECTED_RELEASE_WORKFLOW_SOURCE,
+      '          main_sha256="$(sha256sum dist/main.js | cut -d \' \' -f 1)"\n'
+        + '          manifest_sha256="$(sha256sum dist/manifest.json | cut -d \' \' -f 1)"\n'
+        + '          [[ "$main_sha256" =~ ^[[:xdigit:]]{64}$ ]]\n'
+        + '          [[ "$manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]\n'
+        + '          printf \'main=%s\\n\' "$main_sha256" >> "$GITHUB_OUTPUT"\n'
+        + '          printf \'manifest=%s\\n\' "$manifest_sha256" >> "$GITHUB_OUTPUT"\n',
+      '          printf \'main=%s\\n\' "$(sha256sum dist/main.js | cut -d \' \' -f 1)" >> "$GITHUB_OUTPUT"\n'
+        + '          printf \'manifest=%s\\n\' "$(sha256sum dist/manifest.json | cut -d \' \' -f 1)" >> "$GITHUB_OUTPUT"\n'
+    );
+
+    expect(() => {
+      assertReleaseWorkflowContract(mutated);
+    }).toThrow();
+  });
+
+  it('rejects removal of expected and actual digest validation', () => {
+    const withoutExpectedValidation = replaceExactlyOnce(
+      EXPECTED_RELEASE_WORKFLOW_SOURCE,
+      '          [[ "$EXPECTED_MAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]\n',
+      ''
+    );
+    const withoutActualValidation = replaceExactlyOnce(
+      EXPECTED_RELEASE_WORKFLOW_SOURCE,
+      '          [[ "$actual_manifest_sha256" =~ ^[[:xdigit:]]{64}$ ]]\n',
+      ''
+    );
+
+    expect(() => {
+      assertReleaseWorkflowContract(withoutExpectedValidation);
+    }).toThrow();
+    expect(() => {
+      assertReleaseWorkflowContract(withoutActualValidation);
+    }).toThrow();
+  });
+
+  it('rejects combining the two digest comparisons', () => {
+    const mutated = replaceExactlyOnce(
+      EXPECTED_RELEASE_WORKFLOW_SOURCE,
+      '          test "$actual_main_sha256" = "$EXPECTED_MAIN_SHA256"\n'
+        + '          test "$actual_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"\n',
+      '          test "$actual_main_sha256" = "$EXPECTED_MAIN_SHA256"'
+        + ' && test "$actual_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"\n'
+    );
+
+    expect(() => {
+      assertReleaseWorkflowContract(mutated);
+    }).toThrow();
+  });
+});
+
+describe('release workflow hash behavior', () => {
+  it('propagates a failed build hash without emitting outputs', () => {
+    const script = getStepRun(releaseWorkflow, 'build', 'Calculate release asset hashes');
+    const result = runWorkflowShell(script, { sha256sum: 'exit 73' });
+
+    expect(result.status).not.toBe(0);
+    expect(result.githubOutput).toBe('');
+  });
+
+  it('rejects a directory before build hashing', () => {
+    const script = getStepRun(releaseWorkflow, 'build', 'Calculate release asset hashes');
+    const result = runWorkflowShell(script, {
+      main: 'directory',
+      sha256sum: String.raw`printf '%s  %s\n' '${VALID_MAIN_DIGEST}' "$1"`
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.hashLog).toBe('');
+    expect(result.githubOutput).toBe('');
+  });
+
+  it('rejects a directory before publish hashing', () => {
+    const script = getStepRun(releaseWorkflow, 'publish', 'Verify release asset hashes');
+    const result = runWorkflowShell(script, {
+      expectedMain: VALID_MAIN_DIGEST,
+      expectedManifest: VALID_MANIFEST_DIGEST,
+      main: 'directory',
+      sha256sum: MATCHING_SHA256SUM
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.hashLog).toBe('');
+  });
+
+  it.each(['', 'abc', 'gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg', `${VALID_MAIN_DIGEST}a`])(
+    'rejects matching malformed expected and actual hashes %#',
+    (digest) => {
+      const script = getStepRun(releaseWorkflow, 'publish', 'Verify release asset hashes');
+      const result = runWorkflowShell(script, {
+        expectedMain: digest,
+        expectedManifest: digest,
+        sha256sum: String.raw`printf '%s  %s\n' "$EXPECTED_MAIN_SHA256" "$1"`
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.hashLog).toBe('');
+    }
+  );
+
+  it.each(['', 'short', 'z'.repeat(SHA256_HEX_LENGTH)])('rejects a malformed recomputed hash %#', (digest) => {
+    const script = getStepRun(releaseWorkflow, 'publish', 'Verify release asset hashes');
+    const result = runWorkflowShell(script, {
+      expectedMain: VALID_MAIN_DIGEST,
+      expectedManifest: VALID_MANIFEST_DIGEST,
+      sha256sum: String.raw`printf '%s  %s\n' '${digest}' "$1"`
+    });
+
+    expect(result.status).not.toBe(0);
+  });
+
+  it('compares each validated downloaded hash independently', () => {
+    const script = getStepRun(releaseWorkflow, 'publish', 'Verify release asset hashes');
+    const matching = runWorkflowShell(script, {
+      expectedMain: VALID_MAIN_DIGEST,
+      expectedManifest: VALID_MANIFEST_DIGEST,
+      sha256sum: MATCHING_SHA256SUM
+    });
+    const wrongMain = runWorkflowShell(script, {
+      expectedMain: OTHER_VALID_DIGEST,
+      expectedManifest: VALID_MANIFEST_DIGEST,
+      sha256sum: MATCHING_SHA256SUM
+    });
+    const wrongManifest = runWorkflowShell(script, {
+      expectedMain: VALID_MAIN_DIGEST,
+      expectedManifest: OTHER_VALID_DIGEST,
+      sha256sum: MATCHING_SHA256SUM
+    });
+
+    expect(matching.status).toBe(0);
+    expect(wrongMain.status).not.toBe(0);
+    expect(wrongManifest.status).not.toBe(0);
   });
 });
 
