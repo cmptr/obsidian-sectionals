@@ -14,7 +14,15 @@ export interface DestinationFolder {
   readonly path: string;
 }
 
-export interface ExtractionDestinationServices {
+export interface ResolvedRelativeTarget<File extends DestinationFile> {
+  readonly file: File;
+  readonly normalizedPath: string;
+}
+
+// eslint-disable-next-line perfectionist/sort-modules -- Keep the approved public interface order.
+export interface ExtractionDestinationServices<
+  File extends DestinationFile = DestinationFile
+> {
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
   readonly fileExists: (normalizedPath: string) => boolean;
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
@@ -26,11 +34,13 @@ export interface ExtractionDestinationServices {
   readonly resolveLink: (
     linkpath: string,
     sourcePath: string
-  ) => DestinationFile | null;
+  ) => File | null;
 }
 
 // eslint-disable-next-line perfectionist/sort-modules -- Keep the approved public interface order.
-export type DestinationPreparation =
+export type DestinationPreparation<
+  File extends DestinationFile = DestinationFile
+> =
   // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
   | { readonly kind: 'invalid'; readonly reason: 'unresolved-relative-link' }
   // eslint-disable-next-line no-restricted-syntax, perfectionist/sort-union-types -- Keep the approved compact union order.
@@ -39,6 +49,7 @@ export type DestinationPreparation =
     readonly filename: string;
     readonly kind: 'ready';
     readonly path: string;
+    readonly resolvedRelativeTargets: readonly ResolvedRelativeTarget<File>[];
     readonly suffixIndex: number;
   };
 
@@ -61,12 +72,14 @@ export function createExtractionWikilink(
   return `[[${target}|${escapeWikilinkAlias(displayTitle)}]]`;
 }
 
-export function prepareExtractionDestination(
+export function prepareExtractionDestination<
+  File extends DestinationFile = DestinationFile
+>(
   draft: SectionExtractionDraft,
   sourcePath: string,
-  services: ExtractionDestinationServices,
+  services: ExtractionDestinationServices<File>,
   startingSuffixIndex = 0
-): DestinationPreparation {
+): DestinationPreparation<File> {
   let suffixIndex = startingSuffixIndex;
   for (;;) {
     const filename = createNumberedFilename(draft.filenameStem, suffixIndex);
@@ -79,6 +92,7 @@ export function prepareExtractionDestination(
 
     if (!services.fileExists(path)) {
       const destinationParentPath = getParentPath(path);
+      const resolvedRelativeTargets: ResolvedRelativeTarget<File>[] = [];
       const content = rewriteMarkdownTargets(
         draft.destinationContent,
         draft.relativeTargets,
@@ -90,6 +104,12 @@ export function prepareExtractionDestination(
           if (destinationFile === null) {
             return null;
           }
+          resolvedRelativeTargets.push({
+            file: destinationFile,
+            normalizedPath: normalizePosixPath(
+              normalizePath(destinationFile.path)
+            )
+          });
           const targetPath = getWrittenTargetPath(
             destinationFile,
             target.explicitMarkdownExtension
@@ -105,6 +125,7 @@ export function prepareExtractionDestination(
         filename,
         kind: 'ready',
         path,
+        resolvedRelativeTargets: [...resolvedRelativeTargets],
         suffixIndex
       };
     }

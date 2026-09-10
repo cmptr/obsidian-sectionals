@@ -60,6 +60,7 @@ describe('prepareExtractionDestination paths', () => {
       filename: 'Beta.md',
       kind: 'ready',
       path: expectedPath,
+      resolvedRelativeTargets: [],
       suffixIndex: 0
     });
     expect(getNewFileParent).toHaveBeenCalledExactlyOnceWith(
@@ -85,6 +86,7 @@ describe('prepareExtractionDestination paths', () => {
       filename: 'Beta 2.md',
       kind: 'ready',
       path: 'Notes/Beta 2.md',
+      resolvedRelativeTargets: [],
       suffixIndex: 2
     });
     expect(getNewFileParent.mock.calls).toEqual([
@@ -307,6 +309,106 @@ describe('createExtractionWikilink', () => {
 });
 
 describe('prepareExtractionDestination Markdown targets', () => {
+  it('snapshots canonical resolved identities without changing rewritten bytes', () => {
+    const source = [
+      '# Beta',
+      '[Target](../Notes/Target.md)',
+      '![Image](../Assets/image.png)',
+      ''
+    ].join('\n');
+    const draft = createDraftFromSource(source);
+    const noteFile = {
+      extension: 'md',
+      path: 'Notes//Drafts/../Target.md'
+    };
+    const imageFile = {
+      extension: 'png',
+      path: 'Assets/./image.png'
+    };
+    const preparation = prepareExtractionDestination(
+      draft,
+      'Source/Alpha.md',
+      {
+        fileExists: vi.fn(() => false),
+        getNewFileParent: vi.fn(() => ({ path: '' })),
+        resolveLink: vi.fn((linkpath) => linkpath === '../Notes/Target.md' ? noteFile : imageFile)
+      }
+    );
+
+    expect(preparation).toMatchObject({
+      content: [
+        '# Beta',
+        '',
+        '[Target](Notes/Target.md)',
+        '![Image](Assets/image.png)',
+        ''
+      ].join('\n'),
+      kind: 'ready',
+      resolvedRelativeTargets: [
+        { file: noteFile, normalizedPath: 'Notes/Target.md' },
+        { file: imageFile, normalizedPath: 'Assets/image.png' }
+      ]
+    });
+    if (preparation.kind !== 'ready') {
+      throw new Error('Expected ready destination preparation.');
+    }
+    expect(preparation.resolvedRelativeTargets[0]?.file).toBe(noteFile);
+    expect(preparation.resolvedRelativeTargets[1]?.file).toBe(imageFile);
+  });
+
+  it('keeps the canonical Markdown extension when the written target omits it', () => {
+    const draft = createDraftFromSource('# Beta\n[Target]([[Target]])\n');
+    const noteFile = {
+      extension: 'md',
+      path: 'Notes/Target.md'
+    };
+    const preparation = prepareExtractionDestination(
+      draft,
+      'Source/Alpha.md',
+      {
+        fileExists: vi.fn(() => false),
+        getNewFileParent: vi.fn(() => ({ path: 'Notes' })),
+        resolveLink: vi.fn(() => noteFile)
+      }
+    );
+
+    expect(preparation).toMatchObject({
+      content: '# Beta\n\n[Target](Target)\n',
+      kind: 'ready',
+      resolvedRelativeTargets: [
+        { file: noteFile, normalizedPath: 'Notes/Target.md' }
+      ]
+    });
+  });
+
+  it('snapshots every duplicate reference to a resolved target', () => {
+    const draft = createDraftFromSource(
+      '# Beta\n[One](Target) [Two](Target)\n'
+    );
+    const noteFile = {
+      extension: 'md',
+      path: 'Notes/Target.md'
+    };
+    const preparation = prepareExtractionDestination(
+      draft,
+      'Source/Alpha.md',
+      {
+        fileExists: vi.fn(() => false),
+        getNewFileParent: vi.fn(() => ({ path: 'Notes' })),
+        resolveLink: vi.fn(() => noteFile)
+      }
+    );
+
+    expect(preparation).toMatchObject({
+      content: '# Beta\n\n[One](Target) [Two](Target)\n',
+      kind: 'ready',
+      resolvedRelativeTargets: [
+        { file: noteFile, normalizedPath: 'Notes/Target.md' },
+        { file: noteFile, normalizedPath: 'Notes/Target.md' }
+      ]
+    });
+  });
+
   it('rewrites an inline Markdown destination in the duplicated heading', () => {
     const draft = createDraftFromSource(
       '# [Project](../Plans/Plan.md#Scope)\nbody\n'
