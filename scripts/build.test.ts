@@ -118,7 +118,10 @@ describe('compatibility floor', () => {
     const config = loadMinimumConfig();
     const program = createProgram({
       options: config.options,
-      rootNames: config.fileNames
+      rootNames: config.fileNames,
+      ...(config.projectReferences && {
+        projectReferences: config.projectReferences
+      })
     });
 
     expect(formatDiagnostics(getPreEmitDiagnostics(program))).toEqual([]);
@@ -160,7 +163,10 @@ describe('compatibility floor', () => {
       );
       const program = createProgram({
         options: config.options,
-        rootNames: [...config.fileNames, probePath]
+        rootNames: [...config.fileNames, probePath],
+        ...(config.projectReferences && {
+          projectReferences: config.projectReferences
+        })
       });
       const probeDiagnostics = formatDiagnostics(
         getPreEmitDiagnostics(program).filter(
@@ -181,12 +187,23 @@ describe('compatibility floor', () => {
   });
 
   it.each([
-    'let a=/(?<=x)y/;',
-    'let a=/(?<!x)y/;'
-  ])('rejects regex lookbehind literals: %s', (source) => {
+    'let a=/(?<=x)y/giu;',
+    'let a=/(?<!x)y/giu;'
+  ])('rejects flagged regex lookbehind literals: %s', (source) => {
     expect(() => {
       assertMobileCompatibleJavaScript(source);
     }).toThrow('regex lookbehind');
+  });
+
+  it.each([
+    String.raw`let a=/\(?<=/u;`,
+    String.raw`let a=/\(?<!/u;`,
+    'let a=/[(?<=]/u;',
+    'let a=/[(?<!]/u;'
+  ])('allows escaped or character-class lookbehind text: %s', (source) => {
+    expect(() => {
+      assertMobileCompatibleJavaScript(source);
+    }).not.toThrow();
   });
 
   it('allows lookbehind text in strings, templates, and comments', () => {
@@ -200,6 +217,12 @@ describe('compatibility floor', () => {
     expect(() => {
       assertMobileCompatibleJavaScript(source);
     }).not.toThrow();
+  });
+
+  it('rejects malformed JavaScript', () => {
+    expect(() => {
+      assertMobileCompatibleJavaScript('const value = ;');
+    }).toThrow('invalid JavaScript');
   });
 
   it('accepts ordinary ES2020 JavaScript', () => {

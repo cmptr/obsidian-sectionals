@@ -1,8 +1,14 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible TypeScript imports compact.
 import type { Node, RegularExpressionLiteral } from 'typescript';
 
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible TypeScript imports compact.
-import { createSourceFile, forEachChild, isRegularExpressionLiteral, ScriptKind, ScriptTarget } from 'typescript';
+import {
+  createSourceFile,
+  forEachChild,
+  isRegularExpressionLiteral,
+  ScriptKind,
+  ScriptTarget,
+  transpileModule
+} from 'typescript';
 
 const DENSITY_SCALE = 1000;
 const MAX_UNICODE_ESCAPE_DENSITY = 1;
@@ -14,6 +20,14 @@ export interface UnicodeEscapeStats {
 }
 
 export function assertMobileCompatibleJavaScript(source: string): void {
+  const transpileResult = transpileModule(source, {
+    compilerOptions: { target: ScriptTarget.ESNext },
+    fileName: 'main.js',
+    reportDiagnostics: true
+  });
+  if ((transpileResult.diagnostics?.length ?? 0) > 0) {
+    throw new Error('Built JavaScript is invalid JavaScript.');
+  }
   const syntaxTree = createSourceFile(
     'main.js',
     source,
@@ -44,11 +58,45 @@ export function inspectUnicodeEscapes(source: string): UnicodeEscapeStats {
   };
 }
 
+function containsRegexLookbehind(literal: string): boolean {
+  let isInsideCharacterClass = false;
+  let isEscaped = false;
+  for (let index = 1; index < literal.length; index += 1) {
+    const character = literal[index];
+    if (isEscaped) {
+      isEscaped = false;
+      continue;
+    }
+    if (character === '\\') {
+      isEscaped = true;
+      continue;
+    }
+    if (character === '[') {
+      isInsideCharacterClass = true;
+      continue;
+    }
+    if (character === ']' && isInsideCharacterClass) {
+      isInsideCharacterClass = false;
+      continue;
+    }
+    if (character === '/' && !isInsideCharacterClass) {
+      return false;
+    }
+    if (
+      !isInsideCharacterClass
+      && (
+        literal.startsWith('(?<=', index)
+        || literal.startsWith('(?<!', index)
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function findRegexLookbehind(node: Node): RegularExpressionLiteral | undefined {
-  if (
-    isRegularExpressionLiteral(node)
-    && (node.text.includes('(?<=') || node.text.includes('(?<!'))
-  ) {
+  if (isRegularExpressionLiteral(node) && containsRegexLookbehind(node.text)) {
     return node;
   }
   return forEachChild(node, findRegexLookbehind);
