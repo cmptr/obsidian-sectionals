@@ -8,6 +8,7 @@ import type { EditorPosition } from 'obsidian';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  ExtractionCreateResult,
   ExtractionEditor,
   ExtractionFile,
   ExtractionNoticeDetails,
@@ -30,11 +31,15 @@ interface StoredFakeFile {
 }
 
 class FakeFile implements ExtractionFile {
+  readonly extension: string;
+
   constructor(
     readonly id: number,
     public basename: string,
     public path: string
-  ) {}
+  ) {
+    this.extension = path.slice(path.lastIndexOf('.') + 1);
+  }
 }
 
 class StatefulEditor implements ExtractionEditor {
@@ -116,11 +121,16 @@ class StatefulEditor implements ExtractionEditor {
 
 class StatefulRuntime implements ExtractionRuntime<FakeFile> {
   afterRead: ((file: FakeFile) => void) | undefined;
+  readonly createResults: ExtractionCreateResult<FakeFile>[] = [];
   readonly events: string[];
   readonly files = new Map<string, StoredFakeFile>();
   readonly create = vi.fn(async (path: string, content: string) => {
     this.events.push(`create:${path}`);
-    return this.storeCreatedFile(path, content);
+    const result = this.createResults.shift();
+    if (result !== undefined) {
+      return result;
+    }
+    return createdCreateResult(this.storeCreatedFile(path, content));
   });
   readonly delete = vi.fn(async (file: FakeFile) => {
     this.events.push(`delete:${file.path}:${String(file.id)}`);
@@ -170,6 +180,12 @@ class StatefulRuntime implements ExtractionRuntime<FakeFile> {
     this.files.set(path, { content, file });
     return file;
   }
+}
+
+function createdCreateResult(
+  file: FakeFile
+): ExtractionCreateResult<FakeFile> {
+  return { file, kind: 'created' };
 }
 
 /* eslint-enable @stylistic/lines-between-class-members, @typescript-eslint/explicit-member-accessibility -- Stateful fake definitions are complete. */
@@ -508,7 +524,7 @@ describe('executeSectionExtraction created-file identity', () => {
     runtime.create.mockImplementationOnce(async (_path, content) => {
       const file = new FakeFile(99, 'Beta', 'Elsewhere/Beta.md');
       runtime.files.set(file.path, { content, file });
-      return file;
+      return createdCreateResult(file);
     });
     const { notices, notify } = createNotify();
 
@@ -536,7 +552,7 @@ describe('executeSectionExtraction created-file identity', () => {
           throw new Error('path unavailable');
         }
       });
-      return file;
+      return createdCreateResult(file);
     });
     const { notices, notify } = createNotify();
 
@@ -559,7 +575,7 @@ describe('executeSectionExtraction created-file identity', () => {
     runtime.create.mockImplementationOnce(async (path, content) => {
       const file = runtime.storeCreatedFile(path, content);
       file.basename = 'Other';
-      return file;
+      return createdCreateResult(file);
     });
     const { notices, notify } = createNotify();
 
@@ -634,7 +650,7 @@ describe('executeSectionExtraction created-file identity', () => {
     runtime.create.mockImplementationOnce(async (path, content) => {
       runtime.storeCreatedFile(path, content);
       returnedFile = new FakeFile(99, 'Beta', path);
-      return returnedFile;
+      return createdCreateResult(returnedFile);
     });
     const { notices, notify } = createNotify();
 
@@ -733,28 +749,22 @@ describe('executeSectionExtraction final commit gate', () => {
 });
 
 describe('executeSectionExtraction collision races', () => {
-  it('re-prepares content and source linking at the next suffix after a create race', async () => {
+  it('re-prepares filename, parent, content, and target snapshots after an explicit collision', async () => {
     const editor = new StatefulEditor(
       '# Beta\n[Asset](../Assets/Photo.png)\n',
       10
     );
     const runtime = new StatefulRuntime();
+    const firstTarget = new FakeFile(100, 'First', 'Assets/First.png');
+    const retriedTarget = new FakeFile(101, 'Photo', 'Assets/Photo.png');
+    runtime.createResults.push({ kind: 'collision' });
     runtime.getNewFileParent.mockImplementation((_sourcePath, filename) => {
       runtime.events.push(`getNewFileParent:${filename}`);
       return { path: filename === 'Beta.md' ? 'Extracted' : 'Archive/Nested' };
     });
-    runtime.resolveLink.mockReturnValue({
-      extension: 'png',
-      path: 'Assets/Photo.png'
-    });
-    runtime.create.mockImplementationOnce(async (path) => {
-      runtime.events.push(`create:${path}`);
-      runtime.files.set(path, {
-        content: 'won by another writer',
-        file: new FakeFile(999, 'Beta', path)
-      });
-      throw new Error('already exists');
-    });
+    runtime.resolveLink
+      .mockReturnValueOnce(firstTarget)
+      .mockReturnValueOnce(retriedTarget);
     const { notices, notify } = createNotify();
 
     await expect(
@@ -762,16 +772,30 @@ describe('executeSectionExtraction collision races', () => {
     ).resolves.toBe(true);
 
     expect(notices).toEqual([]);
-    expect(runtime.create).toHaveBeenCalledTimes(2);
-    expect(runtime.create.mock.calls[0]?.[0]).toBe('Extracted/Beta.md');
-    expect(runtime.create.mock.calls[1]).toEqual([
-      'Archive/Nested/Beta 1.md',
-      '# Beta\n\n[Asset](../../Assets/Photo.png)\n'
+    expect(runtime.create.mock.calls).toEqual([
+      [
+        'Extracted/Beta.md',
+        '# Beta\n\n[Asset](../Assets/First.png)\n'
+      ],
+      [
+        'Archive/Nested/Beta 1.md',
+        '# Beta\n\n[Asset](../../Assets/Photo.png)\n'
+      ]
     ]);
     expect(runtime.getNewFileParent.mock.calls).toEqual([
       ['Projects/Source.md', 'Beta.md'],
       ['Projects/Source.md', 'Beta 1.md']
     ]);
+    expect(runtime.resolveLink).toHaveBeenNthCalledWith(
+      1,
+      '../Assets/Photo.png',
+      'Projects/Source.md'
+    );
+    expect(runtime.resolveLink).toHaveBeenNthCalledWith(
+      2,
+      '../Assets/Photo.png',
+      'Projects/Source.md'
+    );
     expect(runtime.getLinktext).toHaveBeenCalledTimes(2);
     expect(runtime.getLinktext).toHaveBeenNthCalledWith(
       1,
@@ -790,19 +814,13 @@ describe('executeSectionExtraction collision races', () => {
       'Projects/Source.md'
     );
     expect(editor.currentSource()).toBe('[[Beta 1|Beta]]\n');
-    expect(runtime.files.get('Extracted/Beta.md')?.content).toBe(
-      'won by another writer'
-    );
     expect(runtime.delete).not.toHaveBeenCalled();
   });
 
-  it('does not retry a create rejection when the candidate still does not exist', async () => {
+  it('stops after one explicit failed create result', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
-    runtime.create.mockImplementationOnce(async (path) => {
-      runtime.events.push(`create:${path}`);
-      throw new Error('permission denied');
-    });
+    runtime.createResults.push({ kind: 'failed' });
     const { notices, notify } = createNotify();
 
     await expect(
@@ -811,16 +829,42 @@ describe('executeSectionExtraction collision races', () => {
 
     expect(notices).toEqual([{ kind: 'create-failed' }]);
     expect(runtime.create).toHaveBeenCalledOnce();
+    expect(runtime.fileExists).toHaveBeenCalledOnce();
+    expect(runtime.read).not.toHaveBeenCalled();
     expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('does not open a file when open-mode destination creation fails', async () => {
+  it('fails closed after one rejected create promise without probing again', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.create.mockRejectedValueOnce(new Error('already exists'));
+    const { notices, notify } = createNotify();
+
+    await expect(
+      executeSectionExtraction(editor, 'Source.md', { mode: 'linked' }, runtime, notify)
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{ kind: 'create-failed' }]);
+    expect(runtime.create).toHaveBeenCalledOnce();
+    expect(runtime.fileExists).toHaveBeenCalledOnce();
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a failed result when a same-path file appears during creation', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
     runtime.create.mockImplementationOnce(async (path) => {
       runtime.events.push(`create:${path}`);
-      throw new Error('permission denied');
+      runtime.files.set(path, {
+        content: 'created by another writer',
+        file: new FakeFile(999, 'Beta', path)
+      });
+      return { kind: 'failed' as const };
     });
     const { notices, notify } = createNotify();
     const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
@@ -836,21 +880,55 @@ describe('executeSectionExtraction collision races', () => {
     ).resolves.toBe(true);
 
     expect(notices).toEqual([{ kind: 'create-failed' }]);
-    expect(openCreatedFile).not.toHaveBeenCalled();
     expect(runtime.create).toHaveBeenCalledOnce();
+    expect(runtime.fileExists).toHaveBeenCalledOnce();
+    expect(runtime.read).not.toHaveBeenCalled();
     expect(runtime.delete).not.toHaveBeenCalled();
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
     expect(editor.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('stops after 10,000 create collisions', async () => {
+  it('does not retry a rejection when a same-path file appears during creation', async () => {
+    const editor = new StatefulEditor('# Beta\nbody\n', 9);
+    const runtime = new StatefulRuntime();
+    runtime.create.mockImplementationOnce(async (path) => {
+      runtime.events.push(`create:${path}`);
+      runtime.files.set(path, {
+        content: 'created by another writer',
+        file: new FakeFile(999, 'Beta', path)
+      });
+      throw new Error('already exists');
+    });
+    const { notices, notify } = createNotify();
+    const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
+
+    await expect(
+      executeSectionExtraction(
+        editor,
+        'Source.md',
+        { mode: 'open', openCreatedFile },
+        runtime,
+        notify
+      )
+    ).resolves.toBe(true);
+
+    expect(notices).toEqual([{ kind: 'create-failed' }]);
+    expect(runtime.create).toHaveBeenCalledOnce();
+    expect(runtime.fileExists).toHaveBeenCalledOnce();
+    expect(runtime.read).not.toHaveBeenCalled();
+    expect(runtime.delete).not.toHaveBeenCalled();
+    expect(openCreatedFile).not.toHaveBeenCalled();
+    expect(editor.currentSource()).toBe('# Beta\nbody\n');
+    expect(editor.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('stops after 10,000 explicit create collisions', async () => {
     const editor = new StatefulEditor('# Beta\nbody\n', 9);
     const runtime = new StatefulRuntime();
     runtime.create.mockImplementation(async (path) => {
-      runtime.files.set(path, {
-        content: 'won by another writer',
-        file: new FakeFile(999, 'collision', path)
-      });
-      throw new Error('already exists');
+      runtime.events.push(`create:${path}`);
+      return { kind: 'collision' as const };
     });
     const { notices, notify } = createNotify();
 
@@ -894,7 +972,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       runtime.events.push(`create:${path}`);
       createdFile = runtime.storeCreatedFile(path, content);
       editor.overwriteSource('# Beta\nchanged\n');
-      return createdFile;
+      return createdCreateResult(createdFile);
     });
     const { notices, notify } = createNotify();
 
@@ -917,7 +995,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       runtime.events.push(`create:${path}`);
       const file = runtime.storeCreatedFile(path, content);
       editor.overwriteSource('# Beta\nchanged\n');
-      return file;
+      return createdCreateResult(file);
     });
     const { notices, notify } = createNotify();
     const openCreatedFile = vi.fn<(file: FakeFile) => Promise<void>>();
@@ -972,7 +1050,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       editor.getValue.mockImplementationOnce(() => {
         throw new Error('editor read failed');
       });
-      return file;
+      return createdCreateResult(file);
     });
     const { notices, notify } = createNotify();
 
@@ -1041,7 +1119,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       runtime.events.push(`create:${path}`);
       const file = runtime.storeCreatedFile(path, content);
       editor.overwriteSource('# Zeta\nbody\n');
-      return file;
+      return createdCreateResult(file);
     });
     runtime.read.mockRejectedValueOnce(new Error('read failed'));
     const { notices, notify } = createNotify();
@@ -1066,7 +1144,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
       runtime.events.push(`create:${path}`);
       const file = runtime.storeCreatedFile(path, content);
       editor.overwriteSource('# Beta\nchanged\n');
-      return file;
+      return createdCreateResult(file);
     });
     runtime.delete.mockImplementationOnce(async (file) => {
       runtime.events.push(`delete:${file.path}`);
@@ -1136,7 +1214,7 @@ describe('executeSectionExtraction pre-commit rollback', () => {
     let createdFile: FakeFile | undefined;
     runtime.create.mockImplementationOnce(async (path, content) => {
       createdFile = runtime.storeCreatedFile(path, content);
-      return createdFile;
+      return createdCreateResult(createdFile);
     });
     runtime.getLinktext.mockImplementationOnce(() => {
       throw new Error('link generation failed');

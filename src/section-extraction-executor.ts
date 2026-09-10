@@ -3,7 +3,6 @@
 import type { Editor } from 'obsidian';
 
 import type {
-  DestinationFile,
   DestinationFolder,
   DestinationPreparation,
   ExtractionDestinationServices
@@ -43,8 +42,17 @@ export interface ExtractionEditor {
 
 export interface ExtractionFile {
   readonly basename: string;
+  readonly extension: string;
   readonly path: string;
 }
+
+export type ExtractionCreateResult<File extends ExtractionFile> =
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | { readonly file: File; readonly kind: 'created' }
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | { readonly kind: 'collision' }
+  // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
+  | { readonly kind: 'failed' };
 
 export type ExtractionExecution<File extends ExtractionFile> =
   // eslint-disable-next-line no-restricted-syntax -- The approved API uses a compact discriminated union.
@@ -58,7 +66,10 @@ export type ExtractionExecution<File extends ExtractionFile> =
 
 export interface ExtractionRuntime<File extends ExtractionFile> {
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
-  readonly create: (path: string, content: string) => Promise<File>;
+  readonly create: (
+    path: string,
+    content: string
+  ) => Promise<ExtractionCreateResult<File>>;
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
   readonly delete: (file: File) => Promise<void>;
   // eslint-disable-next-line @typescript-eslint/method-signature-style -- The approved service contract uses readonly function properties.
@@ -76,7 +87,7 @@ export interface ExtractionRuntime<File extends ExtractionFile> {
   readonly resolveLink: (
     linkpath: string,
     sourcePath: string
-  ) => DestinationFile | null;
+  ) => File | null;
 }
 
 export type ExtractionNotice =
@@ -112,13 +123,10 @@ interface CommitSuccessResult {
   readonly sourceNotice?: ExtractionNoticeDetails;
 }
 
-interface DestinationReadyDiscriminant {
-  readonly kind: 'ready';
-}
-
-type ReadyDestinationPreparation = Extract<
-  DestinationPreparation,
-  DestinationReadyDiscriminant
+type ReadyDestinationPreparation<File extends ExtractionFile> = Extract<
+  DestinationPreparation<File>,
+  // eslint-disable-next-line no-restricted-syntax -- The approved generic preparation contract uses a compact discriminant.
+  { readonly kind: 'ready' }
 >;
 
 interface CreatedDestination<File extends ExtractionFile> {
@@ -126,7 +134,7 @@ interface CreatedDestination<File extends ExtractionFile> {
   readonly intendedBasename: string;
   readonly intendedPath: string;
   readonly kind: 'created';
-  readonly preparation: ReadyDestinationPreparation;
+  readonly preparation: ReadyDestinationPreparation<File>;
 }
 
 interface DeletedRollbackResult {
@@ -499,7 +507,7 @@ async function createDestination<File extends ExtractionFile>(
 ): Promise<DestinationCreationResult<File>> {
   let suffixAttempts = 0;
   let startingSuffixIndex = 0;
-  const services: ExtractionDestinationServices = {
+  const services: ExtractionDestinationServices<File> = {
     fileExists(path) {
       if (suffixAttempts >= MAXIMUM_SUFFIX_ATTEMPTS) {
         throw new RangeError('Extraction suffix safety limit reached.');
@@ -512,7 +520,7 @@ async function createDestination<File extends ExtractionFile>(
   };
 
   for (;;) {
-    let preparation: DestinationPreparation;
+    let preparation: DestinationPreparation<File>;
     try {
       preparation = prepareExtractionDestination(
         draft,
@@ -527,22 +535,20 @@ async function createDestination<File extends ExtractionFile>(
       return { kind: 'failed', notice: { kind: preparation.reason } };
     }
 
-    let file: File;
+    let result: ExtractionCreateResult<File>;
     try {
-      file = await runtime.create(preparation.path, preparation.content);
+      result = await runtime.create(preparation.path, preparation.content);
     } catch {
-      let isCollision = false;
-      try {
-        isCollision = runtime.fileExists(preparation.path);
-      } catch {
-        // A failed collision probe cannot justify another create attempt.
-      }
-      if (!isCollision || suffixAttempts >= MAXIMUM_SUFFIX_ATTEMPTS) {
-        return { kind: 'failed', notice: { kind: 'create-failed' } };
-      }
+      return { kind: 'failed', notice: { kind: 'create-failed' } };
+    }
+    if (result.kind === 'collision') {
       startingSuffixIndex = preparation.suffixIndex + 1;
       continue;
     }
+    if (result.kind === 'failed') {
+      return { kind: 'failed', notice: { kind: 'create-failed' } };
+    }
+    const file = result.file;
 
     const creation: CreatedDestination<File> = {
       file,

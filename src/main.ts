@@ -10,6 +10,7 @@ import { MarkdownView, normalizePath, Notice, Plugin, TFile, TFolder } from 'obs
 import type { DeletionMode, DeletionRange, DeletionTarget } from './deletion-planner.ts';
 import type { MarkdownBlockKind } from './markdown-structure.ts';
 import type {
+  ExtractionCreateResult,
   ExtractionEditor,
   ExtractionExecution,
   ExtractionNoticeDetails,
@@ -454,12 +455,15 @@ function assertCurrentExtractionFile(app: App, file: TFile): void {
 
 function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
   return {
-    async create(path, content): Promise<TFile> {
-      const file = await app.vault.create(normalizePath(path), content);
-      if (!(file instanceof TFile)) {
-        throw new TypeError('Expected Vault.create() to return a file.');
+    async create(path, content): Promise<ExtractionCreateResult<TFile>> {
+      try {
+        const file = await app.vault.create(normalizePath(path), content);
+        return file instanceof TFile
+          ? { file, kind: 'created' as const }
+          : { kind: 'failed' as const };
+      } catch {
+        return { kind: 'failed' as const };
       }
-      return file;
     },
     delete(file): Promise<void> {
       assertCurrentExtractionFile(app, file);

@@ -172,6 +172,50 @@ function getRegisteredCommands(
   );
 }
 
+async function captureExtractionRuntime(
+  app: App,
+  sourceFile: PublicTFile
+): Promise<ExtractionRuntime<PublicTFile>> {
+  let capturedRuntime: ExtractionRuntime<PublicTFile> | undefined;
+  let completion: Promise<void> | undefined;
+  const commands = getRegisteredCommands(
+    loadPluginCommands(app, {
+      execute: vi.fn((
+        _editor: SectionEditor,
+        _sourcePath: string,
+        _execution: ExtractionExecution<PublicTFile>,
+        runtime: ExtractionRuntime<PublicTFile>
+      ) => {
+        capturedRuntime = runtime;
+        return Promise.resolve(true);
+      }),
+      notify: vi.fn(),
+      observeExecution(execution) {
+        completion = execution;
+      }
+    })
+  );
+  const source = '# Extract me\nbody\n';
+  const fixture = createEditor(source, source.indexOf('body'));
+
+  expect(
+    commands.get('extract-current-section-to-linked-note')
+      ?.editorCheckCallback?.(
+        false,
+        fixture.editor as Editor,
+        createMarkdownView(sourceFile, fixture.editor)
+      )
+  ).toBe(true);
+  if (completion === undefined) {
+    throw new TypeError('Expected an observed extraction promise.');
+  }
+  await completion;
+  if (capturedRuntime === undefined) {
+    throw new TypeError('Expected a captured extraction runtime.');
+  }
+  return capturedRuntime;
+}
+
 const IDENTITY_DESTINATION_PATH = 'Folder/Extract me.md';
 const IDENTITY_SOURCE = '# Extract me\nbody\n';
 const IDENTITY_SOURCE_PATH = 'Folder/source.md';
@@ -1286,13 +1330,26 @@ describe('SectionalsPlugin', () => {
         expect(
           runtime.getLinktext(targetFile, 'Folder//source.md')
         ).toBe('target');
-        const created = await runtime.create(
+        const creation = await runtime.create(
           'Extracted//created.md',
           'created'
         );
-        expect(created).toBeInstanceOf(TFile);
-        expect(await runtime.read(created)).toBe('created');
-        await runtime.delete(created);
+        const createdFile = app.vault.getAbstractFileByPath(
+          'Extracted/created.md'
+        );
+        if (
+          !(createdFile instanceof PublicTFile)
+          || !(createdFile instanceof TFile)
+        ) {
+          throw new TypeError('Expected the concrete created file.');
+        }
+        expect(creation).toEqual({ file: createdFile, kind: 'created' });
+        if (creation.kind !== 'created') {
+          throw new TypeError('Expected a created extraction result.');
+        }
+        expect(creation.file).toBe(createdFile);
+        expect(await runtime.read(creation.file)).toBe('created');
+        await runtime.delete(creation.file);
         return true;
       }
     );
@@ -1346,6 +1403,63 @@ describe('SectionalsPlugin', () => {
     expect(read).toHaveBeenCalledWith(expect.any(PublicTFile));
     expect(trashFile).toHaveBeenCalledWith(expect.any(PublicTFile));
     expect(app.vault.getAbstractFileByPath('Extracted/created.md')).toBeNull();
+  });
+
+  it.each([
+    ['collision-like Error', new Error('File already exists')],
+    ['generic Error', new Error('Permission denied')],
+    ['non-Error reason', 'already exists']
+  ])('maps every %s Vault.create rejection to failed without collision probing', async (_label, reason) => {
+    const app = ObsidianApp.createConfigured__({
+      files: { 'Folder/source.md': '# Extract me\nbody\n' }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected the create-rejection source file.');
+    }
+    const runtime = await captureExtractionRuntime(asApp(app), sourceFile);
+    const getAbstractFileByPath = vi.spyOn(
+      app.vault,
+      'getAbstractFileByPath'
+    );
+    vi.spyOn(app.vault, 'create').mockRejectedValueOnce(reason);
+
+    await expect(
+      runtime.create('Folder/Extract me.md', 'destination')
+    ).resolves.toEqual({ kind: 'failed' });
+
+    expect(getAbstractFileByPath).not.toHaveBeenCalled();
+  });
+
+  it('maps a Vault.create rejection to failed when a same-path file appears first', async () => {
+    const app = ObsidianApp.createConfigured__({
+      files: { 'Folder/source.md': '# Extract me\nbody\n' }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Folder/source.md');
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected the create-race source file.');
+    }
+    const runtime = await captureExtractionRuntime(asApp(app), sourceFile);
+    const originalCreate = app.vault.create.bind(app.vault);
+    vi.spyOn(app.vault, 'create').mockImplementationOnce(
+      async (path, content, options) => {
+        await originalCreate(path, content, options);
+        throw new Error('File already exists');
+      }
+    );
+
+    await expect(
+      runtime.create('Folder/Extract me.md', 'created concurrently')
+    ).resolves.toEqual({ kind: 'failed' });
+
+    const samePathFile = app.vault.getAbstractFileByPath(
+      'Folder/Extract me.md'
+    );
+    expect(samePathFile).toBeInstanceOf(PublicTFile);
+    if (!(samePathFile instanceof TFile)) {
+      throw new TypeError('Expected the same-path file to remain present.');
+    }
+    expect(await app.vault.read(samePathFile)).toBe('created concurrently');
   });
 
   it('passes a decoded logical Markdown linkpath through the real destination adapter', async () => {
