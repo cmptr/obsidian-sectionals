@@ -1,10 +1,9 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structure imports compact.
-import type { MarkdownBlock, MarkdownBlockKind, MarkdownHeading, MarkdownStructure } from './markdown-structure.ts';
-import type { MarkdownSection } from './section-query.ts';
+import type { MarkdownBlock, MarkdownBlockKind, MarkdownHeading } from './markdown-structure.ts';
+import type { StructuralPlanningContext } from './structural-planning-context.ts';
 
-import { parseMarkdownStructure } from './markdown-structure.ts';
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible query imports compact.
-import { collectMarkdownSections, findMarkdownSection } from './section-query.ts';
+import { findMarkdownSection } from './section-query.ts';
+import { createStructuralPlanningContext } from './structural-planning-context.ts';
 
 export type DeletionMode = 'heading-block' | 'section';
 
@@ -42,13 +41,6 @@ interface PlannedHeadingDeletion {
   readonly range: DeletionRange;
 }
 
-interface PlanningContext {
-  readonly cursorOffset: number;
-  readonly sections: readonly MarkdownSection[];
-  readonly source: string;
-  readonly structure: MarkdownStructure;
-}
-
 const CONTEXTUAL_TARGET_KINDS = [
   'fenced-code',
   'callout',
@@ -75,14 +67,24 @@ export function collectDeletionTargets(
   source: string,
   cursorOffset: number
 ): readonly DeletionTarget[] {
-  const context = createPlanningContext(source, cursorOffset);
-  if (context === null) {
+  return collectDeletionTargetsWithContext(
+    createStructuralPlanningContext(source),
+    cursorOffset
+  );
+}
+
+export function collectDeletionTargetsWithContext(
+  context: StructuralPlanningContext,
+  cursorOffset: number
+): readonly DeletionTarget[] {
+  const { source } = context;
+  if (!isValidCursorOffset(source, cursorOffset)) {
     return [];
   }
 
   const candidates: DeletionCandidate[] = [];
   for (const kind of CONTEXTUAL_TARGET_KINDS) {
-    const block = findContextualBlock(context, kind);
+    const block = findContextualBlock(context, cursorOffset, kind);
     if (block !== null) {
       candidates.push({
         detail: getBlockDetail(source, block),
@@ -93,7 +95,7 @@ export function collectDeletionTargets(
   }
 
   for (const mode of ['section', 'heading-block'] as const) {
-    const planned = planHeadingDeletion(context, mode);
+    const planned = planHeadingDeletion(context, cursorOffset, mode);
     if (planned !== null) {
       candidates.push({
         detail: getHeadingDetail(source, planned.heading),
@@ -120,8 +122,22 @@ export function planContextualDeletion(
   cursorOffset: number,
   kind: MarkdownBlockKind
 ): DeletionRange | null {
-  const context = createPlanningContext(source, cursorOffset);
-  const block = context === null ? null : findContextualBlock(context, kind);
+  return planContextualDeletionWithContext(
+    createStructuralPlanningContext(source),
+    cursorOffset,
+    kind
+  );
+}
+
+export function planContextualDeletionWithContext(
+  context: StructuralPlanningContext,
+  cursorOffset: number,
+  kind: MarkdownBlockKind
+): DeletionRange | null {
+  if (!isValidCursorOffset(context.source, cursorOffset)) {
+    return null;
+  }
+  const block = findContextualBlock(context, cursorOffset, kind);
   return block === null ? null : { from: block.start, to: block.end };
 }
 
@@ -130,8 +146,22 @@ export function planSectionDeletion(
   cursorOffset: number,
   mode: DeletionMode
 ): DeletionRange | null {
-  const context = createPlanningContext(source, cursorOffset);
-  return context === null ? null : planHeadingDeletion(context, mode)?.range ?? null;
+  return planSectionDeletionWithContext(
+    createStructuralPlanningContext(source),
+    cursorOffset,
+    mode
+  );
+}
+
+export function planSectionDeletionWithContext(
+  context: StructuralPlanningContext,
+  cursorOffset: number,
+  mode: DeletionMode
+): DeletionRange | null {
+  if (!isValidCursorOffset(context.source, cursorOffset)) {
+    return null;
+  }
+  return planHeadingDeletion(context, cursorOffset, mode)?.range ?? null;
 }
 
 function containsCursor(
@@ -161,27 +191,6 @@ function countDeletionLines(source: string, range: DeletionRange): number {
   return text.endsWith('\n') ? lineCount : lineCount + 1;
 }
 
-function createPlanningContext(
-  source: string,
-  cursorOffset: number
-): null | PlanningContext {
-  if (
-    !Number.isSafeInteger(cursorOffset)
-    || cursorOffset < 0
-    || cursorOffset > source.length
-  ) {
-    return null;
-  }
-
-  const structure = parseMarkdownStructure(source);
-  return {
-    cursorOffset,
-    sections: collectMarkdownSections(structure),
-    source,
-    structure
-  };
-}
-
 function findBoundary(
   headings: readonly MarkdownHeading[],
   target: MarkdownHeading
@@ -196,10 +205,11 @@ function findBoundary(
 }
 
 function findContextualBlock(
-  context: PlanningContext,
+  context: StructuralPlanningContext,
+  cursorOffset: number,
   kind: MarkdownBlockKind
 ): MarkdownBlock | null {
-  const { cursorOffset, source, structure } = context;
+  const { source, structure } = context;
   if (cursorOffset === source.length && source.endsWith('\n')) {
     return null;
   }
@@ -297,6 +307,12 @@ function getTargetKindPriority(kind: DeletionTargetKind): number {
   return TARGET_KIND_PRIORITY.indexOf(kind);
 }
 
+function isValidCursorOffset(source: string, cursorOffset: number): boolean {
+  return Number.isSafeInteger(cursorOffset)
+    && cursorOffset >= 0
+    && cursorOffset <= source.length;
+}
+
 function mergeDeletionCandidates(
   source: string,
   candidates: readonly DeletionCandidate[]
@@ -354,10 +370,11 @@ function mergeDeletionCandidates(
 }
 
 function planHeadingDeletion(
-  context: PlanningContext,
+  context: StructuralPlanningContext,
+  cursorOffset: number,
   mode: DeletionMode
 ): null | PlannedHeadingDeletion {
-  const { cursorOffset, sections, source, structure } = context;
+  const { sections, source, structure } = context;
   const section = findMarkdownSection(
     source.length,
     sections,

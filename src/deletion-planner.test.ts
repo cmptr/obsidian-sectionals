@@ -3,10 +3,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   collectDeletionTargets,
+  collectDeletionTargetsWithContext,
   formatDeletionTarget,
   planContextualDeletion,
-  planSectionDeletion
+  planContextualDeletionWithContext,
+  planSectionDeletion,
+  planSectionDeletionWithContext
 } from './deletion-planner.ts';
+import { createStructuralPlanningContext } from './structural-planning-context.ts';
 
 function contextualRangeText(
   source: string,
@@ -453,6 +457,75 @@ describe('planSectionDeletion', () => {
       expect(planSectionDeletion('# H', cursor, 'section')).toBeNull();
     }
   );
+});
+
+describe('context-aware deletion planner parity', () => {
+  it.each([
+    {
+      cursorOffset: 9,
+      name: 'ATX headings with LF blank lines',
+      source: '# Root\n\nbody\n## Child\nchild\n'
+    },
+    {
+      cursorOffset: 6,
+      name: 'a multiline Setext heading',
+      source: 'First title\nsecond title\n===\nbody\n# Keep\n'
+    },
+    {
+      cursorOffset: 29,
+      name: 'nested quoted callout and fenced code',
+      source: '> [!note]\n> before\n> ```ts\n> code\n> ```\n> after\n'
+    },
+    {
+      cursorOffset: 13,
+      name: 'a protected range',
+      source: '# Root\n%%\n## Hidden\n%%\n## Visible\nbody\n'
+    },
+    {
+      cursorOffset: 8,
+      name: 'CRLF headings',
+      source: '# Root\r\nbody\r\n## Child\r\nchild\r\n'
+    },
+    {
+      cursorOffset: 12,
+      name: 'true EOF without a trailing line break',
+      source: '# Final\nbody'
+    },
+    {
+      cursorOffset: -1,
+      name: 'a negative cursor offset',
+      source: '# Root\nbody\n'
+    },
+    {
+      cursorOffset: 4,
+      name: 'a cursor beyond the source',
+      source: 'abc'
+    },
+    {
+      cursorOffset: 1.5,
+      name: 'a non-integer cursor offset',
+      source: 'abc'
+    }
+  ])('matches every source-based deletion planner for $name', ({
+    cursorOffset,
+    source
+  }) => {
+    const context = createStructuralPlanningContext(source);
+
+    expect(
+      collectDeletionTargetsWithContext(context, cursorOffset)
+    ).toEqual(collectDeletionTargets(source, cursorOffset));
+    for (const kind of ['fenced-code', 'callout', 'blockquote'] as const) {
+      expect(
+        planContextualDeletionWithContext(context, cursorOffset, kind)
+      ).toEqual(planContextualDeletion(source, cursorOffset, kind));
+    }
+    for (const mode of ['heading-block', 'section'] as const) {
+      expect(
+        planSectionDeletionWithContext(context, cursorOffset, mode)
+      ).toEqual(planSectionDeletion(source, cursorOffset, mode));
+    }
+  });
 });
 
 describe('planContextualDeletion', () => {

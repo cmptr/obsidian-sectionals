@@ -1,15 +1,12 @@
 import type { HeadingLevel } from './markdown-structure.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible action type imports compact.
 import type { ChangeSectionHierarchyAction, StructuralEditPlan } from './structural-action.ts';
+import type { StructuralPlanningContext } from './structural-planning-context.ts';
 
 import { planHeadingLevelRewrite } from './heading-level-rewriter.ts';
-import { parseMarkdownStructure } from './markdown-structure.ts';
-import {
-  collectMarkdownSections,
-  findHeadingsInSection,
-  findMarkdownSection,
-  findPreviousSiblingSection
-} from './section-query.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible query imports compact.
+import { findHeadingsInSection, findMarkdownSection, findPreviousSiblingSection } from './section-query.ts';
+import { createStructuralPlanningContext } from './structural-planning-context.ts';
 
 const MAX_HEADING_LEVEL: HeadingLevel = 6;
 const MIN_HEADING_LEVEL: HeadingLevel = 1;
@@ -19,6 +16,19 @@ export function planSectionHierarchyChange(
   cursorOffset: number,
   action: ChangeSectionHierarchyAction
 ): null | StructuralEditPlan {
+  return planSectionHierarchyChangeWithContext(
+    createStructuralPlanningContext(source),
+    cursorOffset,
+    action
+  );
+}
+
+export function planSectionHierarchyChangeWithContext(
+  context: StructuralPlanningContext,
+  cursorOffset: number,
+  action: ChangeSectionHierarchyAction
+): null | StructuralEditPlan {
+  const { sections, source, structure } = context;
   if (
     !Number.isSafeInteger(cursorOffset)
     || cursorOffset < 0
@@ -27,8 +37,6 @@ export function planSectionHierarchyChange(
     return null;
   }
 
-  const structure = parseMarkdownStructure(source);
-  const sections = collectMarkdownSections(structure);
   const target = findMarkdownSection(source.length, sections, cursorOffset);
   if (target === null) {
     return null;

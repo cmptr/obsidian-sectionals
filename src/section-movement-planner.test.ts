@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible type imports compact.
 import type { MoveSectionAction, SectionMovementMode, StructuralEditPlan } from './structural-action.ts';
 
-import { planSectionMovement } from './section-movement-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import { planSectionMovement, planSectionMovementWithContext } from './section-movement-planner.ts';
+import { createStructuralPlanningContext } from './structural-planning-context.ts';
 
 function applyPlan(source: string, plan: StructuralEditPlan): string {
   return source.slice(0, plan.range.from)
@@ -26,6 +28,94 @@ function requiredPlan(
   }
   return plan;
 }
+
+describe('context-aware section movement planner parity', () => {
+  it.each([
+    {
+      cursorOffset: (source: string): number => source.indexOf('\nb\n') + 1,
+      name: 'ATX siblings with LF endings',
+      source: '# Root\n## Alpha\na\n## Beta\nb\n## Gamma\ng\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('Beta body'),
+      name: 'an ATX descendant subtree',
+      source: '# Root\n## Alpha\na\n## Beta\nBeta body\n### Child\nchild\n## Gamma\ng\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('beta'),
+      name: 'nested siblings with a shared parent',
+      source: '# Root\n## Parent\n### Alpha\nalpha\n### Beta\nbeta\n## Keep\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.lastIndexOf('beta'),
+      name: 'quoted ATX siblings',
+      source: '> ## Alpha\n> alpha\n> ## Beta\n> beta\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.lastIndexOf('beta'),
+      name: 'callout-contained ATX siblings',
+      source: '> [!note] Sections\n> ## Alpha\n> alpha\n> ## Beta\n> beta\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('Beta title'),
+      name: 'multiline Setext siblings',
+      source: 'Alpha title\ncontinued\n---\n\nBeta title\ncontinued\n---\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('\r\nb\r\n') + 2,
+      name: 'ATX siblings with CRLF endings',
+      source: '# Root\r\n## Alpha\r\na\r\n## Beta\r\nb\r\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('\nb\n') + 1,
+      name: 'exact blank lines and no trailing line break',
+      source: '# Root\n## Alpha\na\n\n## Beta\nb\n\n\n## Gamma\ng'
+    },
+    {
+      cursorOffset: (source: string): number => source.length,
+      name: 'a true EOF cursor',
+      source: '# Root\n## Alpha\na\n## Beta\nb'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('Hidden'),
+      name: 'a fenced-code protected heading',
+      source: '```md\n# Hidden\n```\n# Alpha\na\n# Beta\nb\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('Hidden'),
+      name: 'a frontmatter protected heading',
+      source: '---\n# Hidden\n---\n# Alpha\na\n# Beta\nb\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('Hidden'),
+      name: 'an HTML-comment protected heading',
+      source: '<!--\n# Hidden\n-->\n# Alpha\na\n# Beta\nb\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('Hidden'),
+      name: 'an Obsidian-comment protected heading',
+      source: '%%\n# Hidden\n%%\n# Alpha\na\n# Beta\nb\n'
+    },
+    {
+      cursorOffset: (): number => -1,
+      name: 'an invalid cursor offset',
+      source: '# Alpha\na\n# Beta\nb\n'
+    }
+  ])('matches every movement mode for $name', ({
+    cursorOffset: selectCursorOffset,
+    source
+  }) => {
+    const context = createStructuralPlanningContext(source);
+    const cursorOffset = selectCursorOffset(source);
+
+    for (const mode of ['up', 'down', 'start', 'end'] as const) {
+      const action = { kind: 'move-section', mode } as const;
+      expect(
+        planSectionMovementWithContext(context, cursorOffset, action)
+      ).toEqual(planSectionMovement(source, cursorOffset, action));
+    }
+  });
+});
 
 describe('planSectionMovement', () => {
   it('plans adjacent and non-adjacent movement among same-level siblings', () => {

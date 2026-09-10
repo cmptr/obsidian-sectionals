@@ -1,15 +1,29 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible type imports compact.
 import type { MoveSectionAction, StructuralEditPlan } from './structural-action.ts';
+import type { StructuralPlanningContext } from './structural-planning-context.ts';
 
-import { parseMarkdownStructure } from './markdown-structure.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible query imports compact.
-import { collectMarkdownSections, findMarkdownSection, findSiblingSections } from './section-query.ts';
+import { findMarkdownSection, findSiblingSections } from './section-query.ts';
+import { createStructuralPlanningContext } from './structural-planning-context.ts';
 
 export function planSectionMovement(
   source: string,
   cursorOffset: number,
   action: MoveSectionAction
 ): null | StructuralEditPlan {
+  return planSectionMovementWithContext(
+    createStructuralPlanningContext(source),
+    cursorOffset,
+    action
+  );
+}
+
+export function planSectionMovementWithContext(
+  context: StructuralPlanningContext,
+  cursorOffset: number,
+  action: MoveSectionAction
+): null | StructuralEditPlan {
+  const { sections, source } = context;
   if (
     !Number.isSafeInteger(cursorOffset)
     || cursorOffset < 0
@@ -18,7 +32,6 @@ export function planSectionMovement(
     return null;
   }
 
-  const sections = collectMarkdownSections(parseMarkdownStructure(source));
   const target = findMarkdownSection(source.length, sections, cursorOffset);
   if (target === null) {
     return null;

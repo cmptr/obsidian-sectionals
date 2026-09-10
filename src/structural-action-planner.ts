@@ -2,20 +2,38 @@
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible type imports compact.
 import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
+import type { StructuralPlanningContext } from './structural-planning-context.ts';
 
-import { planSectionHierarchyChange } from './section-hierarchy-planner.ts';
-import { planSectionMovement } from './section-movement-planner.ts';
+import { planSectionHierarchyChangeWithContext } from './section-hierarchy-planner.ts';
+import { planSectionMovementWithContext } from './section-movement-planner.ts';
+import { createStructuralPlanningContext } from './structural-planning-context.ts';
 
 export function planStructuralAction(
   source: string,
   cursorOffset: number,
   action: StructuralAction
 ): StructuralEditPlan | null {
+  return planStructuralActionWithContext(
+    createStructuralPlanningContext(source),
+    cursorOffset,
+    action
+  );
+}
+
+export function planStructuralActionWithContext(
+  context: StructuralPlanningContext,
+  cursorOffset: number,
+  action: StructuralAction
+): StructuralEditPlan | null {
   switch (action.kind) {
     case 'move-section':
-      return planSectionMovement(source, cursorOffset, action);
+      return planSectionMovementWithContext(context, cursorOffset, action);
     case 'change-section-hierarchy':
-      return planSectionHierarchyChange(source, cursorOffset, action);
+      return planSectionHierarchyChangeWithContext(
+        context,
+        cursorOffset,
+        action
+      );
     default:
       return assertNever(action);
   }

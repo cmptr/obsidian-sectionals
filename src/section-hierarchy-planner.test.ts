@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 import type { ChangeSectionHierarchyAction, SectionHierarchyMode, StructuralEditPlan } from './structural-action.ts';
 
 import { parseMarkdownStructure } from './markdown-structure.ts';
-import { planSectionHierarchyChange } from './section-hierarchy-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import { planSectionHierarchyChange, planSectionHierarchyChangeWithContext } from './section-hierarchy-planner.ts';
+import { createStructuralPlanningContext } from './structural-planning-context.ts';
 
 function applyPlan(source: string, plan: StructuralEditPlan): string {
   return source.slice(0, plan.range.from)
@@ -52,6 +54,99 @@ const PROMOTE: ChangeSectionHierarchyAction = {
   kind: 'change-section-hierarchy',
   mode: 'promote'
 };
+
+describe('context-aware section hierarchy planner parity', () => {
+  it.each([
+    {
+      cursorOffset: (): number => -1,
+      name: 'an invalid cursor offset',
+      source: '# Root\n## Target\nbody\n'
+    },
+    {
+      cursorOffset: (): number => 4,
+      name: 'plain text without a section',
+      source: 'plain text only\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('Hidden'),
+      name: 'a protected heading',
+      source: '```md\n# Hidden\n```\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('body'),
+      name: 'an H1 target',
+      source: '# Target\nbody\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('inner body'),
+      name: 'a deepest quoted H1 target',
+      source: '## Enclosing\nouter body\n> # Deepest\n> inner body\n## Keep\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('body'),
+      name: 'the first same-level sibling',
+      source: '# Root\n## Target\nbody\n## Later\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.lastIndexOf('body'),
+      name: 'a target after a different-level heading',
+      source: '# Root\n### Before\nbefore body\n## Target\ntarget body\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('target body'),
+      name: 'a target under a different parent',
+      source: '# Root\n## First\n### Before\nbefore\n## Second\n### Target\ntarget body\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('target'),
+      name: 'a target after a sibling in another container',
+      source: '> ## Before\n> before\n\noutside\n\n> ## Target\n> target\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('target body'),
+      name: 'a subtree containing an H6',
+      source: '# Root\n## Previous\nprevious\n## Target\ntarget body\n###### Deep\ndeep\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('target body'),
+      name: 'an ATX subtree with skipped levels and blank lines',
+      source: '# Parent\n## Previous\nprevious\n\n## Target ##  \ntarget body\n##### Deep\ndeep\n## Keep\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('body  '),
+      name: 'a mixed Setext and ATX subtree',
+      source: 'Parent\n======\nparent\n\nTarget\n------  \nbody  \n#### Child ##  \nchild\n\nKeep\n------\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.length,
+      name: 'a CRLF subtree at true EOF',
+      source: 'Previous\r\n--------\r\nprevious\r\n\r\nTarget\r\n--------\r\ntarget\r\n#### Child\r\nchild'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('> body'),
+      name: 'a quoted ATX subtree',
+      source: '> ## Target\n> body\n> #### Child\n> child\n'
+    },
+    {
+      cursorOffset: (source: string): number => source.indexOf('> target'),
+      name: 'a callout-contained ATX subtree',
+      source: '> [!note] Sections\n> ## Previous\n> previous\n> ## Target\n> target\n> ##### Deep\n> deep\n'
+    }
+  ])('matches both hierarchy modes for $name', ({
+    cursorOffset: selectCursorOffset,
+    source
+  }) => {
+    const context = createStructuralPlanningContext(source);
+    const cursorOffset = selectCursorOffset(source);
+
+    for (const mode of ['promote', 'demote'] as const) {
+      const action = { kind: 'change-section-hierarchy', mode } as const;
+      expect(
+        planSectionHierarchyChangeWithContext(context, cursorOffset, action)
+      ).toEqual(planSectionHierarchyChange(source, cursorOffset, action));
+    }
+  });
+});
 
 describe('planSectionHierarchyChange', () => {
   describe('validity', () => {
