@@ -15,6 +15,7 @@ import type { MockInstance } from 'vitest';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Obsidian imports compact.
 import { TFile as PublicTFile, TFolder as PublicTFolder } from 'obsidian';
+import { noopAsync } from 'obsidian-dev-utils/function';
 // eslint-disable-next-line @stylistic/object-curly-newline, perfectionist/sort-named-imports -- Keep dprint-compatible canonical test imports.
 import { App as ObsidianApp, MarkdownView, TFile, TFolder, WorkspaceLeaf } from 'obsidian-test-mocks/obsidian';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
@@ -26,6 +27,7 @@ import type { DeletionRange, DeletionTarget } from './deletion-planner.ts';
 import type { ExtractionExecution, ExtractionNoticeDetails, ExtractionRuntime } from './section-extraction-executor.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
 import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
+import type { StructuralPlanningContextProvider } from './structural-planning-context.ts';
 
 import SectionalsPlugin, {
   checkAndExecuteStructuralAction,
@@ -34,6 +36,10 @@ import SectionalsPlugin, {
   formatExtractionNotice
 } from './main.ts';
 import { executeSectionExtraction } from './section-extraction-executor.ts';
+import {
+  createEphemeralStructuralPlanningContextProvider,
+  createStructuralPlanningContext
+} from './structural-planning-context.ts';
 
 const extractionPlannerSpies = vi.hoisted(() => ({
   planSectionExtraction: vi.fn()
@@ -158,7 +164,8 @@ function createMarkdownOrigin(
 
 function loadPluginCommands(
   app: App = {} as App,
-  extractionDependencies?: TestExtractionDependencies
+  extractionDependencies?: TestExtractionDependencies,
+  planningContextProvider?: StructuralPlanningContextProvider
 ): PluginCommandsFixture {
   const manifest: PluginManifest = {
     author: 'Aaron Bell',
@@ -172,7 +179,8 @@ function loadPluginCommands(
   const plugin = new SectionalsPlugin(
     app,
     manifest,
-    extractionDependencies
+    extractionDependencies,
+    planningContextProvider
   );
   const addCommand = vi.spyOn(plugin, 'addCommand');
 
@@ -905,6 +913,295 @@ describe('SectionalsPlugin', () => {
         name: 'Extract current section to new note'
       }
     ]);
+  });
+
+  it('shares one context across synchronous checks and expires it after the microtask', async () => {
+    const source = '# Root\n## Alpha\nalpha\n## Beta\nbeta\n';
+    const app = ObsidianApp.createConfigured__({
+      files: { 'Notes/source.md': source }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath('Notes/source.md');
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected a shared-check source file.');
+    }
+    const fixture = createEditor(source, source.indexOf('beta'));
+    const origin = createMarkdownOrigin(app, sourceFile, fixture.editor);
+    const openFile = vi.spyOn(origin.leaf, 'openFile');
+    const factory = vi.fn((currentSource: string) => createStructuralPlanningContext(currentSource));
+    const planningContextProvider = createEphemeralStructuralPlanningContextProvider(factory);
+    const execute = vi.fn(() => Promise.resolve(true));
+    const notify = vi.fn();
+    const observeExecution = vi.fn();
+    const commands = getRegisteredCommands(
+      loadPluginCommands(
+        asApp(app),
+        { execute, notify, observeExecution },
+        planningContextProvider
+      )
+    );
+    const rememberedSource = '## One\none\n## Two\ntwo\n';
+    const remembered = createEditor(
+      rememberedSource,
+      rememberedSource.indexOf('one')
+    );
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        remembered.editor as Editor,
+        {} as PublicMarkdownView
+      )
+    ).toBe(true);
+    expect(factory).not.toHaveBeenCalled();
+
+    for (
+      const commandId of [
+        'delete-current-fenced-code-block',
+        'delete-current-callout',
+        'delete-current-blockquote',
+        'move-current-section-up',
+        'move-current-section-down',
+        'move-current-section-to-start',
+        'move-current-section-to-end',
+        'promote-current-section',
+        'demote-current-section',
+        'repeat-last-structural-action',
+        'extract-current-section-to-linked-note',
+        'extract-current-section-to-new-note'
+      ] as const
+    ) {
+      commands.get(commandId)?.editorCheckCallback?.(
+        true,
+        fixture.editor as Editor,
+        origin.view
+      );
+    }
+
+    expect(factory).toHaveBeenCalledExactlyOnceWith(source);
+    expect(fixture.replaceRange).not.toHaveBeenCalled();
+    expect(fixture.setCursor).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(observeExecution).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+    expect(openFile).not.toHaveBeenCalled();
+
+    const repeatProbeSource = '## Left\nleft\n## Right\nright\n';
+    const repeatProbe = createEditor(
+      repeatProbeSource,
+      repeatProbeSource.indexOf('left')
+    );
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeatProbe.editor as Editor,
+        {} as PublicMarkdownView
+      )
+    ).toBe(true);
+    expect(repeatProbe.editor.getValue()).toBe(
+      '## Right\nright\n## Left\nleft\n'
+    );
+    expect(factory).toHaveBeenCalledOnce();
+
+    const changedSource = `${source}## Gamma\ngamma\n`;
+    vi.mocked(fixture.editor.getValue).mockReturnValue(changedSource);
+    commands.get('move-current-section-up')?.editorCheckCallback?.(
+      true,
+      fixture.editor as Editor,
+      origin.view
+    );
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenNthCalledWith(2, changedSource);
+
+    const other = createEditor(changedSource, changedSource.indexOf('beta'));
+    commands.get('move-current-section-up')?.editorCheckCallback?.(
+      true,
+      other.editor as Editor,
+      {} as PublicMarkdownView
+    );
+    expect(factory).toHaveBeenCalledTimes(3);
+    expect(factory).toHaveBeenNthCalledWith(3, changedSource);
+
+    await noopAsync();
+    commands.get('move-current-section-up')?.editorCheckCallback?.(
+      true,
+      other.editor as Editor,
+      {} as PublicMarkdownView
+    );
+    expect(factory).toHaveBeenCalledTimes(4);
+    expect(factory).toHaveBeenNthCalledWith(4, changedSource);
+  });
+
+  it('keeps all execution paths on fresh source-based planning', async () => {
+    const extractionSource = '# Extract me\nbody\n';
+    const app = ObsidianApp.createConfigured__({
+      files: {
+        'Notes/linked.md': extractionSource,
+        'Notes/open.md': extractionSource
+      }
+    });
+    const linkedFile = app.vault.getAbstractFileByPath('Notes/linked.md');
+    const openFile = app.vault.getAbstractFileByPath('Notes/open.md');
+    if (
+      !(linkedFile instanceof PublicTFile)
+      || !(linkedFile instanceof TFile)
+      || !(openFile instanceof PublicTFile)
+      || !(openFile instanceof TFile)
+    ) {
+      throw new TypeError('Expected fresh-execution source files.');
+    }
+    const factory = vi.fn((source: string) => createStructuralPlanningContext(source));
+    const ephemeralProvider = createEphemeralStructuralPlanningContextProvider(factory);
+    const planningContextProvider = vi.fn((editor: object, source: string) => ephemeralProvider(editor, source));
+    const completions: Promise<void>[] = [];
+    const execute = vi.fn(
+      (
+        _editor: SectionEditor,
+        _sourcePath: string,
+        _execution: ExtractionExecution<PublicTFile>,
+        _runtime: ExtractionRuntime<PublicTFile>,
+        _notify: (details: ExtractionNoticeDetails) => void
+      ) => Promise.resolve(true)
+    );
+    const commands = getRegisteredCommands(
+      loadPluginCommands(
+        asApp(app),
+        {
+          execute,
+          notify: vi.fn(),
+          observeExecution(execution) {
+            completions.push(execution);
+          }
+        },
+        planningContextProvider
+      )
+    );
+    const fencedSource = 'before\n```ts\ncode\n```\nafter\n';
+    const fenced = createEditor(fencedSource, fencedSource.indexOf('code'));
+    const view = {} as PublicMarkdownView;
+
+    expect(
+      commands.get('delete-current-fenced-code-block')?.editorCheckCallback?.(
+        true,
+        fenced.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(planningContextProvider).toHaveBeenCalledOnce();
+    planningContextProvider.mockClear();
+
+    expect(
+      commands.get('delete-current-fenced-code-block')?.editorCheckCallback?.(
+        false,
+        fenced.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(fenced.replaceRange).toHaveBeenCalledOnce();
+
+    for (
+      const { commandId, source, target } of [
+        {
+          commandId: 'delete-current-callout',
+          source: '> [!note]\n> body\n',
+          target: 'body'
+        },
+        {
+          commandId: 'delete-current-blockquote',
+          source: '> quote\n> body\n',
+          target: 'body'
+        },
+        {
+          commandId: 'move-current-section-up',
+          source: '## One\none\n## Two\ntwo\n',
+          target: 'two'
+        },
+        {
+          commandId: 'move-current-section-down',
+          source: '## One\none\n## Two\ntwo\n',
+          target: 'one'
+        },
+        {
+          commandId: 'move-current-section-to-start',
+          source: '## One\none\n## Two\ntwo\n## Three\nthree\n',
+          target: 'three'
+        },
+        {
+          commandId: 'move-current-section-to-end',
+          source: '## One\none\n## Two\ntwo\n## Three\nthree\n',
+          target: 'one'
+        },
+        {
+          commandId: 'promote-current-section',
+          source: '# Root\n## Target\ntarget\n',
+          target: 'target'
+        },
+        {
+          commandId: 'demote-current-section',
+          source: '# Root\n## Before\nbefore\n## Target\ntarget\n',
+          target: 'target'
+        }
+      ] as const
+    ) {
+      const current = createEditor(source, source.lastIndexOf(target));
+      expect(
+        commands.get(commandId)?.editorCheckCallback?.(
+          false,
+          current.editor as Editor,
+          view
+        )
+      ).toBe(true);
+      expect(current.editor.getValue).toHaveBeenCalled();
+      expect(current.replaceRange).toHaveBeenCalledOnce();
+    }
+
+    const repeatedSource = '# Root\n## Before\nbefore\n## Target\ntarget\n';
+    const repeated = createEditor(
+      repeatedSource,
+      repeatedSource.lastIndexOf('target')
+    );
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeated.editor as Editor,
+        view
+      )
+    ).toBe(true);
+    expect(repeated.replaceRange).toHaveBeenCalledOnce();
+
+    const linked = createEditor(
+      extractionSource,
+      extractionSource.indexOf('body')
+    );
+    const open = createEditor(
+      extractionSource,
+      extractionSource.indexOf('body')
+    );
+    const origin = createMarkdownOrigin(app, openFile, open.editor);
+    expect(
+      commands.get('extract-current-section-to-linked-note')
+        ?.editorCheckCallback?.(
+          false,
+          linked.editor as Editor,
+          asMarkdownFileInfo({ file: linkedFile })
+        )
+    ).toBe(true);
+    expect(
+      commands.get('extract-current-section-to-new-note')
+        ?.editorCheckCallback?.(
+          false,
+          open.editor as Editor,
+          origin.view
+        )
+    ).toBe(true);
+    await Promise.all(completions);
+
+    expect(planningContextProvider).not.toHaveBeenCalled();
+    expect(factory).toHaveBeenCalledOnce();
+    expect(execute.mock.calls.map((call) => call[2].mode)).toEqual([
+      'linked',
+      'open'
+    ]);
+    expect(linked.editor.getValue).toHaveBeenCalled();
+    expect(open.editor.getValue).toHaveBeenCalled();
   });
 
   // eslint-disable-next-line complexity -- Keep the complete side-effect-free availability matrix in one stateful test.

@@ -18,17 +18,27 @@ import type {
 } from './section-extraction-executor.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
 import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
+import type { StructuralPlanningContextProvider } from './structural-planning-context.ts';
 
-// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
-import { collectDeletionTargets, planContextualDeletion, planSectionDeletion } from './deletion-planner.ts';
+import {
+  collectDeletionTargets,
+  planContextualDeletion,
+  planContextualDeletionWithContext,
+  planSectionDeletion
+} from './deletion-planner.ts';
 import { openDeletionTargetPicker } from './deletion-target-modal.ts';
-import { isSectionExtractionAvailable } from './section-extraction-availability.ts';
+import {
+  isSectionExtractionAvailable,
+  isSectionExtractionAvailableWithContext
+} from './section-extraction-availability.ts';
 import {
   executeSectionExtraction,
   ExtractionPreDelegationSourceChangedError,
   ExtractionSourceChangedError
 } from './section-extraction-executor.ts';
-import { planStructuralAction } from './structural-action-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import { planStructuralAction, planStructuralActionWithContext } from './structural-action-planner.ts';
+import { createEphemeralStructuralPlanningContextProvider } from './structural-planning-context.ts';
 
 export const NO_TARGET_NOTICE = 'No containing heading found.';
 export const PARSE_FAILURE_NOTICE = 'Unable to determine the section to delete.';
@@ -187,14 +197,17 @@ const CONTEXTUAL_COMMANDS: readonly ContextualDeleteCommand[] = [
 export default class SectionalsPlugin extends Plugin {
   private readonly extractionDependencies: ExtractionCommandDependencies;
   private lastStructuralAction: null | StructuralAction = null;
+  private readonly planningContextProvider: StructuralPlanningContextProvider;
 
   public constructor(
     app: App,
     manifest: PluginManifest,
-    extractionDependencies: ExtractionCommandDependencies = DEFAULT_EXTRACTION_COMMAND_DEPENDENCIES
+    extractionDependencies: ExtractionCommandDependencies = DEFAULT_EXTRACTION_COMMAND_DEPENDENCIES,
+    planningContextProvider: StructuralPlanningContextProvider = createEphemeralStructuralPlanningContextProvider()
   ) {
     super(app, manifest);
     this.extractionDependencies = extractionDependencies;
+    this.planningContextProvider = planningContextProvider;
   }
 
   public override onload(): void {
@@ -212,12 +225,20 @@ export default class SectionalsPlugin extends Plugin {
 
     for (const command of CONTEXTUAL_COMMANDS) {
       this.addCommand({
-        editorCheckCallback: (isChecking, editor) =>
-          checkAndExecuteContextualDeleteCommand(
-            isChecking,
+        editorCheckCallback: (isChecking, editor) => {
+          if (isChecking) {
+            return isContextualDeletionAvailable(
+              editor,
+              command.kind,
+              this.planningContextProvider
+            );
+          }
+          return checkAndExecuteContextualDeleteCommand(
+            false,
             editor,
             command.kind
-          ),
+          );
+        },
         id: command.id,
         name: command.name
       });
@@ -242,8 +263,15 @@ export default class SectionalsPlugin extends Plugin {
             kind: 'move-section',
             mode: command.mode
           };
+          if (isChecking) {
+            return isStructuralActionAvailable(
+              editor,
+              action,
+              this.planningContextProvider
+            );
+          }
           return checkAndExecuteStructuralAction(
-            isChecking,
+            false,
             editor,
             action,
             (successfulAction) => {
@@ -263,8 +291,15 @@ export default class SectionalsPlugin extends Plugin {
             kind: 'change-section-hierarchy',
             mode: command.mode
           };
+          if (isChecking) {
+            return isStructuralActionAvailable(
+              editor,
+              action,
+              this.planningContextProvider
+            );
+          }
           return checkAndExecuteStructuralAction(
-            isChecking,
+            false,
             editor,
             action,
             (successfulAction) => {
@@ -283,8 +318,15 @@ export default class SectionalsPlugin extends Plugin {
         if (action === null) {
           return false;
         }
+        if (isChecking) {
+          return isStructuralActionAvailable(
+            editor,
+            action,
+            this.planningContextProvider
+          );
+        }
         return checkAndExecuteStructuralAction(
-          isChecking,
+          false,
           editor,
           action,
           (successfulAction) => {
@@ -299,32 +341,36 @@ export default class SectionalsPlugin extends Plugin {
     this.addCommand({
       editorCheckCallback: (isChecking, editor, context) => {
         const sourceFile = context.file;
-        if (
-          sourceFile === null
-          || !isExtractionAvailable(editor)
-        ) {
+        if (sourceFile === null) {
           return false;
         }
-        if (!isChecking) {
-          const expectedContextEditor = context.editor;
-          const expectedSourcePath = normalizePath(sourceFile.path);
-          const execution = runExtractionCommand(
-            createGuardedExtractionEditor(
-              this.app,
-              sourceFile,
-              expectedSourcePath,
-              context,
-              expectedContextEditor,
-              null,
-              editor
-            ),
-            expectedSourcePath,
-            { mode: 'linked' },
-            createExtractionRuntime(this.app),
-            this.extractionDependencies
+        if (isChecking) {
+          return isExtractionAvailableForCheck(
+            editor,
+            this.planningContextProvider
           );
-          this.extractionDependencies.observeExecution(execution);
         }
+        if (!isExtractionAvailable(editor)) {
+          return false;
+        }
+        const expectedContextEditor = context.editor;
+        const expectedSourcePath = normalizePath(sourceFile.path);
+        const execution = runExtractionCommand(
+          createGuardedExtractionEditor(
+            this.app,
+            sourceFile,
+            expectedSourcePath,
+            context,
+            expectedContextEditor,
+            null,
+            editor
+          ),
+          expectedSourcePath,
+          { mode: 'linked' },
+          createExtractionRuntime(this.app),
+          this.extractionDependencies
+        );
+        this.extractionDependencies.observeExecution(execution);
         return true;
       },
       id: 'extract-current-section-to-linked-note',
@@ -338,37 +384,40 @@ export default class SectionalsPlugin extends Plugin {
         }
         const originatingLeaf = getOriginatingMarkdownLeaf(context, editor);
         const sourceFile = context.file;
-        if (
-          originatingLeaf === null
-          || sourceFile === null
-          || !isExtractionAvailable(editor)
-        ) {
+        if (originatingLeaf === null || sourceFile === null) {
           return false;
         }
-        if (!isChecking) {
-          const expectedSourcePath = normalizePath(sourceFile.path);
-          const execution = runExtractionCommand(
-            createGuardedExtractionEditor(
-              this.app,
-              sourceFile,
-              expectedSourcePath,
-              context,
-              editor,
-              { leaf: originatingLeaf, view: context },
-              editor
-            ),
-            expectedSourcePath,
-            {
-              mode: 'open',
-              openCreatedFile(createdFile) {
-                return originatingLeaf.openFile(createdFile);
-              }
-            },
-            createExtractionRuntime(this.app),
-            this.extractionDependencies
+        if (isChecking) {
+          return isExtractionAvailableForCheck(
+            editor,
+            this.planningContextProvider
           );
-          this.extractionDependencies.observeExecution(execution);
         }
+        if (!isExtractionAvailable(editor)) {
+          return false;
+        }
+        const expectedSourcePath = normalizePath(sourceFile.path);
+        const execution = runExtractionCommand(
+          createGuardedExtractionEditor(
+            this.app,
+            sourceFile,
+            expectedSourcePath,
+            context,
+            editor,
+            { leaf: originatingLeaf, view: context },
+            editor
+          ),
+          expectedSourcePath,
+          {
+            mode: 'open',
+            openCreatedFile(createdFile) {
+              return originatingLeaf.openFile(createdFile);
+            }
+          },
+          createExtractionRuntime(this.app),
+          this.extractionDependencies
+        );
+        this.extractionDependencies.observeExecution(execution);
         return true;
       },
       id: 'extract-current-section-to-new-note',
@@ -472,11 +521,57 @@ function getOriginatingMarkdownLeaf(
   }
 }
 
+function isContextualDeletionAvailable(
+  editor: SectionEditor,
+  kind: MarkdownBlockKind,
+  planningContextProvider: StructuralPlanningContextProvider
+): boolean {
+  try {
+    const source = editor.getValue();
+    const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+    const context = planningContextProvider(editor, source);
+    return planContextualDeletionWithContext(context, cursorOffset, kind)
+      !== null;
+  } catch {
+    return false;
+  }
+}
+
 function isExtractionAvailable(editor: Editor): boolean {
   try {
     const source = editor.getValue();
     const cursorOffset = editor.posToOffset(editor.getCursor('head'));
     return isSectionExtractionAvailable(source, cursorOffset);
+  } catch {
+    return false;
+  }
+}
+
+function isExtractionAvailableForCheck(
+  editor: Editor,
+  planningContextProvider: StructuralPlanningContextProvider
+): boolean {
+  try {
+    const source = editor.getValue();
+    const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+    const context = planningContextProvider(editor, source);
+    return isSectionExtractionAvailableWithContext(context, cursorOffset);
+  } catch {
+    return false;
+  }
+}
+
+function isStructuralActionAvailable(
+  editor: SectionEditor,
+  action: StructuralAction,
+  planningContextProvider: StructuralPlanningContextProvider
+): boolean {
+  try {
+    const source = editor.getValue();
+    const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+    const context = planningContextProvider(editor, source);
+    return planStructuralActionWithContext(context, cursorOffset, action)
+      !== null;
   } catch {
     return false;
   }
