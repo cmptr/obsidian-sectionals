@@ -5,7 +5,7 @@
     "paths": {
       "obsidian": ["./node_modules/obsidian-minimum/obsidian.d.ts"]
     },
-    "types": ["node"]
+    "types": []
   },
   "exclude": ["src/**/*.test.ts"],
   "include": ["src/**/*.ts"]
