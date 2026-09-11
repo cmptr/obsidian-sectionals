@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0
+
 - Add commands to promote or demote complete section hierarchies and repeat those changes.
 - Keep created extraction notes when a concurrent change makes automatic cleanup unsafe.
 - Harden CI and release publication with least-privilege jobs, pinned actions, production dependency audits, and verified release artifact hashes.
