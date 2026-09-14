@@ -2067,6 +2067,8 @@ describe('SectionalsPlugin', () => {
         'delete-current-fenced-code-block',
         'delete-current-callout',
         'delete-current-blockquote',
+        'copy-current-section',
+        'cut-current-section',
         'move-current-section-up',
         'move-current-section-down',
         'move-current-section-to-start',
@@ -2085,9 +2087,9 @@ describe('SectionalsPlugin', () => {
       );
     }
 
-    expect(planningContextProvider).toHaveBeenCalledTimes(12);
+    expect(planningContextProvider).toHaveBeenCalledTimes(14);
     expect(planningContextProvider.mock.calls).toEqual(
-      Array.from({ length: 12 }, () => [fixture.editor, source])
+      Array.from({ length: 14 }, () => [fixture.editor, source])
     );
     expect(factory).toHaveBeenCalledExactlyOnceWith(source);
     expect(fixture.replaceRange).not.toHaveBeenCalled();

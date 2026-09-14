@@ -2,7 +2,8 @@ import { performance } from 'node:perf_hooks';
 
 import type { MarkdownStructure } from '../src/markdown-structure.ts';
 
-import { planContextualDeletionWithContext } from '../src/deletion-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import { planContextualDeletionWithContext, planSectionDeletionWithContext } from '../src/deletion-planner.ts';
 import { parseMarkdownStructure } from '../src/markdown-structure.ts';
 import { isSectionExtractionAvailableWithContext } from '../src/section-extraction-availability.ts';
 import { planSectionExtraction } from '../src/section-extraction-planner.ts';
@@ -57,7 +58,8 @@ const LARGE_PLANNING_BYTES = KIBIBYTE * KIBIBYTE;
 const PERCENT_BLOCK_COUNT = 2000;
 const PERCENT_SCALE_FACTOR = 2;
 const SAMPLE_COUNT = 9;
-const SHARED_CHECK_COUNT = 11;
+const SECTION_CLIPBOARD_CHECK_COUNT = 2;
+const SHARED_CHECK_COUNT = 13;
 const SMALL_PLANNING_KIBIBYTES = 250;
 const SMALL_PLANNING_BYTES = SMALL_PLANNING_KIBIBYTES * KIBIBYTE;
 const WARM_UP_ROUNDS = 3;
@@ -239,6 +241,17 @@ function runContextSharedChecks(input: BenchmarkInput): number {
       successfulResults += 1;
     }
   }
+  for (let index = 0; index < SECTION_CLIPBOARD_CHECK_COUNT; index += 1) {
+    if (
+      planSectionDeletionWithContext(
+        context,
+        offsets.target,
+        'section'
+      ) !== null
+    ) {
+      successfulResults += 1;
+    }
+  }
   for (
     let index = 0;
     index < EXTRACTION_AVAILABILITY_CALL_COUNT;
@@ -319,7 +332,7 @@ const benchmarkCases: readonly BenchmarkCase[] = [
   },
   {
     large: largePlanningInput,
-    name: 'One context-shared 11-check batch',
+    name: 'One context-shared 13-check batch',
     run: runContextSharedChecks,
     small: smallPlanningInput,
     validateResult: validateCountResult

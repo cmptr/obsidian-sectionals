@@ -1,7 +1,8 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it, vi } from 'vitest';
 
-import { planContextualDeletionWithContext } from '../src/deletion-planner.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import { planContextualDeletionWithContext, planSectionDeletionWithContext } from '../src/deletion-planner.ts';
 import { parseMarkdownStructure } from '../src/markdown-structure.ts';
 import { isSectionExtractionAvailableWithContext } from '../src/section-extraction-availability.ts';
 import { planSectionExtraction } from '../src/section-extraction-planner.ts';
@@ -76,6 +77,20 @@ function expectSharedWorkloadResults(
       getContext(),
       offsets.blockquote,
       'blockquote'
+    )
+  ).not.toBeNull();
+  expect(
+    planSectionDeletionWithContext(
+      getContext(),
+      offsets.target,
+      'section'
+    )
+  ).not.toBeNull();
+  expect(
+    planSectionDeletionWithContext(
+      getContext(),
+      offsets.target,
+      'section'
     )
   ).not.toBeNull();
   expect(
