@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0
+
 - Add commands to copy or cut the current section, with clipboard completion required before Cut removes source text.
 
 ## 0.3.0
