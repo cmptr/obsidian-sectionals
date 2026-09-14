@@ -17,12 +17,17 @@ import type { MockInstance } from 'vitest';
 import { TFile as PublicTFile, TFolder as PublicTFolder } from 'obsidian';
 import { noopAsync } from 'obsidian-dev-utils/function';
 // eslint-disable-next-line @stylistic/object-curly-newline, perfectionist/sort-named-imports -- Keep dprint-compatible canonical test imports.
-import { App as ObsidianApp, MarkdownView, TFile, TFolder, WorkspaceLeaf } from 'obsidian-test-mocks/obsidian';
+import { App as ObsidianApp, MarkdownView, Notice, TFile, TFolder, WorkspaceLeaf } from 'obsidian-test-mocks/obsidian';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it, vi } from 'vitest';
 
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionRange, DeletionTarget } from './deletion-planner.ts';
+import type {
+  SectionClipboardEditor,
+  SectionClipboardResult,
+  SectionClipboardRuntime
+} from './section-clipboard-executor.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible executor imports compact.
 import type { ExtractionExecution, ExtractionNoticeDetails, ExtractionRuntime } from './section-extraction-executor.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
@@ -33,8 +38,10 @@ import SectionalsPlugin, {
   checkAndExecuteStructuralAction,
   executeDeleteCommand,
   executeStructurePickerCommand,
-  formatExtractionNotice
+  formatExtractionNotice,
+  formatSectionClipboardNotice
 } from './main.ts';
+import { executeSectionClipboard } from './section-clipboard-executor.ts';
 import { executeSectionExtraction } from './section-extraction-executor.ts';
 import {
   createEphemeralStructuralPlanningContextProvider,
@@ -83,6 +90,18 @@ interface TestExtractionDependencies {
   ): Promise<boolean>;
   notify(message: string): void;
   observeExecution(execution: Promise<void>): void;
+}
+
+interface TestSectionClipboardDependencies {
+  execute(
+    editor: SectionClipboardEditor,
+    cursorOffset: number,
+    mode: 'copy' | 'cut',
+    runtime: SectionClipboardRuntime
+  ): Promise<SectionClipboardResult>;
+  notify(message: string): void;
+  observeExecution(execution: Promise<void>): void;
+  writeText(text: string): Promise<void>;
 }
 
 type SectionEditor = Pick<
@@ -170,7 +189,8 @@ function createMarkdownOrigin(
 function loadPluginCommands(
   app: App = {} as App,
   extractionDependencies?: TestExtractionDependencies,
-  planningContextProvider?: StructuralPlanningContextProvider
+  planningContextProvider?: StructuralPlanningContextProvider,
+  sectionClipboardDependencies?: TestSectionClipboardDependencies
 ): PluginCommandsFixture {
   const manifest: PluginManifest = {
     author: 'Aaron Bell',
@@ -185,7 +205,8 @@ function loadPluginCommands(
     app,
     manifest,
     extractionDependencies,
-    planningContextProvider
+    planningContextProvider,
+    sectionClipboardDependencies
   );
   const addCommand = vi.spyOn(plugin, 'addCommand');
 
@@ -252,6 +273,161 @@ const IDENTITY_SOURCE_PATH = 'Folder/source.md';
 
 type MockObsidianApp = ReturnType<typeof ObsidianApp.createConfigured__>;
 type SourceIdentityFile = PublicTFile & TFile;
+
+const CLIPBOARD_SOURCE = '# Copy me\nbody\n# Keep\nkeep\n';
+const CLIPBOARD_SOURCE_PATH = 'Notes/source.md';
+const CLIPBOARD_TEXT = '# Copy me\nbody\n';
+
+interface MutableClipboardContext {
+  editor: Editor | undefined;
+  file: null | PublicTFile;
+}
+
+interface ClipboardCommandHarness {
+  readonly activeEditor: MutableClipboardContext | null;
+  readonly alternateEditor: EditorFixture;
+  readonly app: MockObsidianApp;
+  readonly commands: ReadonlyMap<string, Command>;
+  readonly context: MutableClipboardContext;
+  finishWrite(): void;
+  readonly fixture: EditorFixture;
+  getCompletion(): Promise<void> | undefined;
+  readonly notify: ReturnType<typeof vi.fn>;
+  readonly otherFile: SourceIdentityFile;
+  readonly sourceFile: SourceIdentityFile;
+  readonly writeText: ReturnType<typeof vi.fn>;
+}
+
+function createClipboardCommandHarness(
+  contextEditorState: 'present' | 'undefined' = 'present',
+  activeEditorState: 'null' | 'object' = 'null'
+): ClipboardCommandHarness {
+  const app = ObsidianApp.createConfigured__({
+    files: {
+      [CLIPBOARD_SOURCE_PATH]: CLIPBOARD_SOURCE,
+      'Notes/other.md': CLIPBOARD_SOURCE
+    }
+  });
+  const sourceFile = app.vault.getAbstractFileByPath(CLIPBOARD_SOURCE_PATH);
+  const otherFile = app.vault.getAbstractFileByPath('Notes/other.md');
+  if (
+    !(sourceFile instanceof PublicTFile)
+    || !(sourceFile instanceof TFile)
+    || !(otherFile instanceof PublicTFile)
+    || !(otherFile instanceof TFile)
+  ) {
+    throw new TypeError('Expected clipboard identity files.');
+  }
+  const fixture = createEditor(CLIPBOARD_SOURCE, CLIPBOARD_SOURCE.indexOf('body'));
+  const alternateEditor = createEditor(
+    CLIPBOARD_SOURCE,
+    CLIPBOARD_SOURCE.indexOf('body')
+  );
+  const context: MutableClipboardContext = {
+    editor: contextEditorState === 'present'
+      ? fixture.editor as Editor
+      : undefined,
+    file: sourceFile
+  };
+  const activeEditor = activeEditorState === 'object'
+    ? {
+      editor: fixture.editor as Editor,
+      file: sourceFile
+    }
+    : null;
+  app.workspace.activeEditor = activeEditor === null
+    ? null
+    : asMarkdownFileInfo(activeEditor);
+
+  let completeWrite: (() => void) | undefined;
+  const writeText = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        completeWrite = resolve;
+      })
+  );
+  const notify = vi.fn();
+  let completion: Promise<void> | undefined;
+  const commands = getRegisteredCommands(
+    loadPluginCommands(
+      asApp(app),
+      undefined,
+      undefined,
+      {
+        execute: executeSectionClipboard,
+        notify,
+        observeExecution(execution) {
+          completion = execution;
+        },
+        writeText
+      }
+    )
+  );
+
+  return {
+    activeEditor,
+    alternateEditor,
+    app,
+    commands,
+    context,
+    finishWrite(): void {
+      if (completeWrite === undefined) {
+        throw new TypeError('Expected a pending clipboard write.');
+      }
+      completeWrite();
+    },
+    fixture,
+    getCompletion(): Promise<void> | undefined {
+      return completion;
+    },
+    notify,
+    otherFile,
+    sourceFile,
+    writeText
+  };
+}
+
+function invokeClipboardCut(harness: ClipboardCommandHarness): void {
+  expect(
+    harness.commands.get('cut-current-section')?.editorCheckCallback?.(
+      false,
+      harness.fixture.editor as Editor,
+      asMarkdownFileInfo(harness.context)
+    )
+  ).toBe(true);
+  expect(harness.writeText).toHaveBeenCalledExactlyOnceWith(CLIPBOARD_TEXT);
+}
+
+async function completeClipboardCommand(
+  harness: ClipboardCommandHarness
+): Promise<void> {
+  harness.finishWrite();
+  const completion = harness.getCompletion();
+  if (completion === undefined) {
+    throw new TypeError('Expected an observed clipboard promise.');
+  }
+  await completion;
+}
+
+async function withNavigatorClipboard(
+  clipboard: unknown,
+  run: () => Promise<void>
+): Promise<void> {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: clipboard
+  });
+  try {
+    await run();
+  } finally {
+    if (descriptor === undefined) {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    } else {
+      Object.defineProperty(navigator, 'clipboard', descriptor);
+    }
+  }
+}
 
 type ExtractionCommandMode = 'linked' | 'open';
 
@@ -786,7 +962,7 @@ describe('SectionalsPlugin', () => {
   it('registers exact editor-only command metadata without hotkeys', () => {
     const { addCommand } = loadPluginCommands();
 
-    expect(addCommand).toHaveBeenCalledTimes(15);
+    expect(addCommand).toHaveBeenCalledTimes(17);
     expect(
       addCommand.mock.calls.map(([command]) => ({
         callback: command.callback,
@@ -844,6 +1020,22 @@ describe('SectionalsPlugin', () => {
         hotkeys: undefined,
         id: 'delete-current-structure',
         name: 'Delete current structure…'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'copy-current-section',
+        name: 'Copy current section'
+      },
+      {
+        callback: undefined,
+        editorCallback: 'undefined',
+        editorCheckCallback: 'function',
+        hotkeys: undefined,
+        id: 'cut-current-section',
+        name: 'Cut current section'
       },
       {
         callback: undefined,
@@ -919,6 +1111,850 @@ describe('SectionalsPlugin', () => {
       }
     ]);
   });
+
+  it('formats every clipboard result as its exact user-facing notice', () => {
+    expect(
+      [
+        'copied',
+        'cut',
+        'operation-failed',
+        'clipboard-failed',
+        'source-changed',
+        'cut-failed',
+        'cut-unverified',
+        'cut-cursor-failed',
+        'unavailable'
+      ].map((status) => formatSectionClipboardNotice({ status } as SectionClipboardResult))
+    ).toEqual([
+      'Section copied.',
+      'Section cut.',
+      'Could not read the current section.',
+      'Could not copy the section to the clipboard.',
+      'Section copied, but the note changed before it could be cut.',
+      'Section copied, but the section could not be cut.',
+      'Section copied, but the cut could not be verified.',
+      'Section cut, but the cursor could not be restored.',
+      null
+    ]);
+  });
+
+  it('checks clipboard command availability without clipboard, notice, edit, or repeat side effects', () => {
+    const execute = vi.fn(executeSectionClipboard);
+    const notify = vi.fn();
+    const observeExecution = vi.fn();
+    const writeText = vi.fn(noopAsync);
+    const commands = getRegisteredCommands(
+      loadPluginCommands(
+        undefined,
+        undefined,
+        undefined,
+        { execute, notify, observeExecution, writeText }
+      )
+    );
+    const availableFileContext = asMarkdownFileInfo({
+      file: { path: 'Notes/source.md' }
+    });
+    const fixtures = [
+      {
+        expected: true,
+        fixture: createEditor('# Root\nbody\n', '# Root\n'.length),
+        name: 'root ATX section'
+      },
+      {
+        expected: true,
+        fixture: createEditor('Root\n====\nbody\n', 'Root\n====\n'.length),
+        name: 'Setext section'
+      },
+      {
+        expected: true,
+        fixture: createEditor('> # Quoted\n> body\n', '> # Quoted\n> '.length),
+        name: 'quoted section'
+      },
+      {
+        expected: true,
+        fixture: createEditor(
+          '> [!note]\n> ## Inner\n> body\n',
+          '> [!note]\n> ## Inner\n> '.length
+        ),
+        name: 'callout section'
+      },
+      {
+        expected: false,
+        fixture: createEditor('%%\n# Hidden\nbody\n%%\n', '%%\n# Hidden\n'.length),
+        name: 'protected heading'
+      },
+      {
+        expected: false,
+        fixture: createEditor('# Root\nbody\n', 100),
+        name: 'invalid cursor'
+      }
+    ] as const;
+
+    for (const commandId of ['copy-current-section', 'cut-current-section']) {
+      const callback = commands.get(commandId)?.editorCheckCallback;
+      if (callback === undefined) {
+        throw new TypeError(`Expected ${commandId} check callback.`);
+      }
+      for (const { expected, fixture, name } of fixtures) {
+        expect(
+          callback(
+            true,
+            fixture.editor as Editor,
+            availableFileContext
+          ),
+          `${commandId}: ${name}`
+        ).toBe(expected);
+      }
+      const root = fixtures[0].fixture;
+      expect(
+        callback(
+          true,
+          root.editor as Editor,
+          asMarkdownFileInfo({ file: null })
+        )
+      ).toBe(false);
+    }
+
+    for (const { fixture } of fixtures) {
+      expect(fixture.replaceRange).not.toHaveBeenCalled();
+      expect(fixture.setCursor).not.toHaveBeenCalled();
+    }
+    expect(execute).not.toHaveBeenCalled();
+    expect(writeText).not.toHaveBeenCalled();
+    expect(observeExecution).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+
+    const movementSource = '## One\none\n## Two\ntwo\n';
+    const movement = createEditor(
+      movementSource,
+      movementSource.indexOf('one')
+    );
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        movement.editor as Editor,
+        {} as PublicMarkdownView
+      )
+    ).toBe(true);
+    const repeatProbe = createEditor(
+      movementSource,
+      movementSource.indexOf('one')
+    );
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeatProbe.editor as Editor,
+        {} as PublicMarkdownView
+      )
+    ).toBe(true);
+    expect(repeatProbe.editor.getValue()).toBe(
+      '## Two\ntwo\n## One\none\n'
+    );
+  });
+
+  it('preserves editor and planning failure boundaries in registered clipboard checks', () => {
+    const source = '# Root\nbody\n';
+    const planningFailure = new Error('planning failed');
+    const planningContextProvider = vi.fn(() => {
+      throw planningFailure;
+    });
+    const commands = getRegisteredCommands(
+      loadPluginCommands(undefined, undefined, planningContextProvider)
+    );
+    const callback = commands.get('copy-current-section')
+      ?.editorCheckCallback;
+    if (callback === undefined) {
+      throw new TypeError('Expected the clipboard check callback.');
+    }
+    const context = asMarkdownFileInfo({ file: { path: 'Notes/source.md' } });
+    const editorFailureCases: readonly EditorFailureCase[] = [
+      {
+        method: 'getValue',
+        throwFrom(editor, failure): void {
+          vi.mocked(editor.getValue).mockImplementationOnce(() => {
+            throw failure;
+          });
+        }
+      },
+      {
+        method: 'getCursor',
+        throwFrom(editor, failure): void {
+          vi.mocked(editor.getCursor).mockImplementationOnce(() => {
+            throw failure;
+          });
+        }
+      },
+      {
+        method: 'posToOffset',
+        throwFrom(editor, failure): void {
+          vi.mocked(editor.posToOffset).mockImplementationOnce(() => {
+            throw failure;
+          });
+        }
+      }
+    ];
+
+    for (const { method, throwFrom } of editorFailureCases) {
+      const fixture = createEditor(source, source.indexOf('body'));
+      const failure = new Error(`${method} failed`);
+      throwFrom(fixture.editor, failure);
+      expect(() => {
+        callback(true, fixture.editor as Editor, context);
+      }).toThrow(failure);
+    }
+    expect(planningContextProvider).not.toHaveBeenCalled();
+
+    const fixture = createEditor(source, source.indexOf('body'));
+    expect(callback(true, fixture.editor as Editor, context)).toBe(false);
+    expect(planningContextProvider).toHaveBeenCalledExactlyOnceWith(
+      fixture.editor,
+      source
+    );
+  });
+
+  it.each(
+    [
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          vi.mocked(harness.fixture.editor.getValue).mockReturnValue(
+            `${CLIPBOARD_SOURCE}changed\n`
+          );
+        },
+        name: 'the editor source changes'
+      },
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          harness.context.file = harness.otherFile;
+        },
+        name: 'the context file identity changes'
+      },
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await harness.app.vault.rename(
+            harness.sourceFile,
+            'Notes/renamed.md'
+          );
+        },
+        name: 'the source file path changes'
+      },
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await harness.app.fileManager.trashFile(harness.sourceFile);
+          await harness.app.vault.create(CLIPBOARD_SOURCE_PATH, CLIPBOARD_SOURCE);
+        },
+        name: 'another file takes the same vault path'
+      },
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'undefined',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          harness.context.editor = harness.alternateEditor.editor as Editor;
+        },
+        name: 'an absent context editor becomes present'
+      },
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          harness.context.editor = undefined;
+        },
+        name: 'a present context editor becomes absent'
+      },
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          harness.context.editor = harness.alternateEditor.editor as Editor;
+        },
+        name: 'the context editor identity changes'
+      },
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          harness.app.workspace.activeEditor = asMarkdownFileInfo({
+            editor: harness.fixture.editor,
+            file: harness.sourceFile
+          });
+        },
+        name: 'the workspace active editor changes from null to an object'
+      },
+      {
+        activeEditorState: 'object',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          harness.app.workspace.activeEditor = null;
+        },
+        name: 'the workspace active editor changes from an object to null'
+      },
+      {
+        activeEditorState: 'object',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          harness.app.workspace.activeEditor = asMarkdownFileInfo({
+            editor: harness.alternateEditor.editor,
+            file: harness.otherFile
+          });
+        },
+        name: 'the workspace active editor object identity changes'
+      },
+      {
+        activeEditorState: 'object',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          if (harness.activeEditor === null) {
+            throw new TypeError('Expected an active workspace editor.');
+          }
+          harness.activeEditor.file = harness.otherFile;
+        },
+        name: 'the active workspace editor\'s file changes'
+      },
+      {
+        activeEditorState: 'object',
+        contextEditorState: 'present',
+        async mutate(harness: ClipboardCommandHarness): Promise<void> {
+          await noopAsync();
+          if (harness.activeEditor === null) {
+            throw new TypeError('Expected an active workspace editor.');
+          }
+          harness.activeEditor.editor = harness.alternateEditor.editor as Editor;
+        },
+        name: 'the active workspace editor\'s editor changes'
+      }
+    ] as const
+  )(
+    'copies the invocation snapshot but cancels Cut when $name before clipboard completion',
+    async ({ activeEditorState, contextEditorState, mutate }) => {
+      const harness = createClipboardCommandHarness(
+        contextEditorState,
+        activeEditorState
+      );
+
+      invokeClipboardCut(harness);
+      await mutate(harness);
+      await completeClipboardCommand(harness);
+
+      expect(harness.writeText).toHaveBeenCalledExactlyOnceWith(CLIPBOARD_TEXT);
+      expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+      expect(harness.fixture.setCursor).not.toHaveBeenCalled();
+      expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
+        'Section copied, but the note changed before it could be cut.'
+      );
+    }
+  );
+
+  it.each(
+    [
+      {
+        activeEditorState: 'null',
+        contextEditorState: 'undefined',
+        name: 'an absent context editor and null active editor'
+      },
+      {
+        activeEditorState: 'object',
+        contextEditorState: 'present',
+        name: 'stable context and active workspace editor objects'
+      }
+    ] as const
+  )(
+    'cuts successfully with $name',
+    async ({ activeEditorState, contextEditorState }) => {
+      const harness = createClipboardCommandHarness(
+        contextEditorState,
+        activeEditorState
+      );
+
+      invokeClipboardCut(harness);
+      await completeClipboardCommand(harness);
+
+      expect(harness.fixture.editor.getValue()).toBe('# Keep\nkeep\n');
+      expect(harness.fixture.replaceRange).toHaveBeenCalledOnce();
+      expect(harness.fixture.setCursor).toHaveBeenCalledExactlyOnceWith({
+        ch: 0,
+        line: 0
+      });
+      expect(harness.notify).toHaveBeenCalledExactlyOnceWith('Section cut.');
+    }
+  );
+
+  it('uses the native clipboard receiver and emits one exact native success Notice', async () => {
+    const app = ObsidianApp.createConfigured__({
+      files: { [CLIPBOARD_SOURCE_PATH]: CLIPBOARD_SOURCE }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath(CLIPBOARD_SOURCE_PATH);
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected the default clipboard source file.');
+    }
+    const fixture = createEditor(CLIPBOARD_SOURCE, CLIPBOARD_SOURCE.indexOf('body'));
+    const receivers: unknown[] = [];
+    const clipboard = {
+      writeText: vi.fn(function writeText(this: unknown): Promise<void> {
+        receivers.push(this);
+        return noopAsync();
+      })
+    };
+    const noticeConstructor = vi.spyOn(Notice.prototype, 'constructor__');
+
+    try {
+      await withNavigatorClipboard(clipboard, async () => {
+        const commands = getRegisteredCommands(loadPluginCommands(asApp(app)));
+        expect(
+          commands.get('copy-current-section')?.editorCheckCallback?.(
+            false,
+            fixture.editor as Editor,
+            asMarkdownFileInfo({ editor: fixture.editor, file: sourceFile })
+          )
+        ).toBe(true);
+        await vi.waitFor(() => {
+          expect(noticeConstructor).toHaveBeenCalledOnce();
+        });
+        expect(noticeConstructor).toHaveBeenCalledWith(
+          'Section copied.',
+          undefined
+        );
+      });
+    } finally {
+      noticeConstructor.mockRestore();
+    }
+
+    expect(clipboard.writeText).toHaveBeenCalledExactlyOnceWith(CLIPBOARD_TEXT);
+    expect(receivers).toEqual([clipboard]);
+    expect(fixture.replaceRange).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      clipboard: undefined,
+      name: 'the Clipboard API is absent'
+    },
+    {
+      clipboard: {
+        writeText: vi.fn(() => Promise.reject(new Error('permission denied')))
+      },
+      name: 'clipboard permission is rejected'
+    }
+  ])(
+    'reports clipboard failure without editing when $name',
+    async ({ clipboard }) => {
+      const app = ObsidianApp.createConfigured__({
+        files: { [CLIPBOARD_SOURCE_PATH]: CLIPBOARD_SOURCE }
+      });
+      const sourceFile = app.vault.getAbstractFileByPath(CLIPBOARD_SOURCE_PATH);
+      if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+        throw new TypeError('Expected the failing clipboard source file.');
+      }
+      const fixture = createEditor(
+        CLIPBOARD_SOURCE,
+        CLIPBOARD_SOURCE.indexOf('body')
+      );
+      const noticeConstructor = vi.spyOn(Notice.prototype, 'constructor__');
+
+      try {
+        await withNavigatorClipboard(clipboard, async () => {
+          const commands = getRegisteredCommands(loadPluginCommands(asApp(app)));
+          expect(
+            commands.get('cut-current-section')?.editorCheckCallback?.(
+              false,
+              fixture.editor as Editor,
+              asMarkdownFileInfo({ editor: fixture.editor, file: sourceFile })
+            )
+          ).toBe(true);
+          await vi.waitFor(() => {
+            expect(noticeConstructor).toHaveBeenCalledOnce();
+          });
+          expect(noticeConstructor).toHaveBeenCalledWith(
+            'Could not copy the section to the clipboard.',
+            undefined
+          );
+        });
+      } finally {
+        noticeConstructor.mockRestore();
+      }
+
+      expect(fixture.replaceRange).not.toHaveBeenCalled();
+      expect(fixture.setCursor).not.toHaveBeenCalled();
+    }
+  );
+
+  it('contains unexpected notifier errors inside the observed clipboard promise', async () => {
+    const app = ObsidianApp.createConfigured__({
+      files: { [CLIPBOARD_SOURCE_PATH]: CLIPBOARD_SOURCE }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath(CLIPBOARD_SOURCE_PATH);
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected the notifier-error source file.');
+    }
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands(
+        asApp(app),
+        undefined,
+        undefined,
+        {
+          execute: vi.fn(async () => {
+            await noopAsync();
+            return { status: 'copied' as const };
+          }),
+          notify: vi.fn(() => {
+            throw new Error('notice failed');
+          }),
+          observeExecution(execution) {
+            completion = execution;
+          },
+          writeText: vi.fn(noopAsync)
+        }
+      )
+    );
+    const fixture = createEditor(CLIPBOARD_SOURCE, CLIPBOARD_SOURCE.indexOf('body'));
+
+    expect(
+      commands.get('copy-current-section')?.editorCheckCallback?.(
+        false,
+        fixture.editor as Editor,
+        asMarkdownFileInfo({ file: sourceFile })
+      )
+    ).toBe(true);
+    if (completion === undefined) {
+      throw new TypeError('Expected the notifier-error clipboard promise.');
+    }
+    await expect(completion).resolves.toBeUndefined();
+  });
+
+  it('finishes Copy from its invocation snapshot when focus changes during the write', async () => {
+    const harness = createClipboardCommandHarness('present', 'object');
+
+    expect(
+      harness.commands.get('copy-current-section')?.editorCheckCallback?.(
+        false,
+        harness.fixture.editor as Editor,
+        asMarkdownFileInfo(harness.context)
+      )
+    ).toBe(true);
+    expect(harness.writeText).toHaveBeenCalledExactlyOnceWith(CLIPBOARD_TEXT);
+    harness.app.workspace.activeEditor = null;
+    harness.context.file = harness.otherFile;
+    harness.context.editor = harness.alternateEditor.editor as Editor;
+    await completeClipboardCommand(harness);
+
+    expect(harness.fixture.editor.getValue()).toBe(CLIPBOARD_SOURCE);
+    expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+    expect(harness.fixture.setCursor).not.toHaveBeenCalled();
+    expect(harness.notify).toHaveBeenCalledExactlyOnceWith('Section copied.');
+  });
+
+  it.each(
+    [
+      ['copied', 'Section copied.'],
+      ['cut', 'Section cut.'],
+      ['operation-failed', 'Could not read the current section.'],
+      ['clipboard-failed', 'Could not copy the section to the clipboard.'],
+      ['source-changed', 'Section copied, but the note changed before it could be cut.'],
+      ['cut-failed', 'Section copied, but the section could not be cut.'],
+      ['cut-unverified', 'Section copied, but the cut could not be verified.'],
+      ['cut-cursor-failed', 'Section cut, but the cursor could not be restored.'],
+      ['unavailable', null]
+    ] as const
+  )(
+    'maps registered Cut result %s to its exact Notice',
+    async (status, expectedNotice) => {
+      const app = ObsidianApp.createConfigured__({
+        files: { [CLIPBOARD_SOURCE_PATH]: CLIPBOARD_SOURCE }
+      });
+      const sourceFile = app.vault.getAbstractFileByPath(CLIPBOARD_SOURCE_PATH);
+      if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+        throw new TypeError('Expected the result-mapping source file.');
+      }
+      let completion: Promise<void> | undefined;
+      const planningContextProvider = vi.fn(() => {
+        throw new Error('check-time context must not reach execution');
+      });
+      const notify = vi.fn();
+      const execute = vi.fn<TestSectionClipboardDependencies['execute']>(
+        async (_editor, _cursorOffset, _mode, _runtime) => {
+          await noopAsync();
+          return { status };
+        }
+      );
+      const commands = getRegisteredCommands(
+        loadPluginCommands(
+          asApp(app),
+          undefined,
+          planningContextProvider,
+          {
+            execute,
+            notify,
+            observeExecution(execution) {
+              completion = execution;
+            },
+            writeText: vi.fn(noopAsync)
+          }
+        )
+      );
+      const fixture = createEditor(
+        CLIPBOARD_SOURCE,
+        CLIPBOARD_SOURCE.indexOf('body')
+      );
+
+      expect(
+        commands.get('cut-current-section')?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          asMarkdownFileInfo({ file: sourceFile })
+        )
+      ).toBe(true);
+      if (completion === undefined) {
+        throw new TypeError('Expected the result-mapping clipboard promise.');
+      }
+      await completion;
+
+      expect(execute).toHaveBeenCalledOnce();
+      expect(execute.mock.calls[0]?.[1]).toBe(CLIPBOARD_SOURCE.indexOf('body'));
+      expect(execute.mock.calls[0]?.[2]).toBe('cut');
+      expect(planningContextProvider).not.toHaveBeenCalled();
+      if (expectedNotice === null) {
+        expect(notify).not.toHaveBeenCalled();
+      } else {
+        expect(notify).toHaveBeenCalledExactlyOnceWith(expectedNotice);
+      }
+    }
+  );
+
+  it.each(
+    [
+      {
+        clipboardCommand: 'copy-current-section',
+        expected: '## Right\nright\n## Left\nleft\n',
+        initialAction: 'move-current-section-down',
+        initialSource: '## One\none\n## Two\ntwo\n',
+        initialTarget: 'one',
+        repeatSource: '## Left\nleft\n## Right\nright\n',
+        repeatTarget: 'left',
+        status: 'copied'
+      },
+      {
+        clipboardCommand: 'cut-current-section',
+        expected: '# Alpha\nalpha\n## Beta\nbeta\n',
+        initialAction: 'promote-current-section',
+        initialSource: '# Root\n## Target\ntarget\n## Keep\nkeep\n',
+        initialTarget: 'target',
+        repeatSource: '## Alpha\nalpha\n## Beta\nbeta\n',
+        repeatTarget: 'alpha',
+        status: 'clipboard-failed'
+      }
+    ] as const
+  )(
+    'preserves repeat memory after $status from $clipboardCommand',
+    async (testCase) => {
+      const app = ObsidianApp.createConfigured__({
+        files: { [CLIPBOARD_SOURCE_PATH]: CLIPBOARD_SOURCE }
+      });
+      const sourceFile = app.vault.getAbstractFileByPath(CLIPBOARD_SOURCE_PATH);
+      if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+        throw new TypeError('Expected the repeat-state clipboard source file.');
+      }
+      let completion: Promise<void> | undefined;
+      const commands = getRegisteredCommands(
+        loadPluginCommands(
+          asApp(app),
+          undefined,
+          undefined,
+          {
+            execute: vi.fn(async () => {
+              await noopAsync();
+              return { status: testCase.status };
+            }),
+            notify: vi.fn(),
+            observeExecution(execution) {
+              completion = execution;
+            },
+            writeText: vi.fn(noopAsync)
+          }
+        )
+      );
+      const initial = createEditor(
+        testCase.initialSource,
+        testCase.initialSource.indexOf(testCase.initialTarget)
+      );
+      expect(
+        commands.get(testCase.initialAction)?.editorCheckCallback?.(
+          false,
+          initial.editor as Editor,
+          {} as PublicMarkdownView
+        )
+      ).toBe(true);
+      const clipboardFixture = createEditor(
+        CLIPBOARD_SOURCE,
+        CLIPBOARD_SOURCE.indexOf('body')
+      );
+      expect(
+        commands.get(testCase.clipboardCommand)?.editorCheckCallback?.(
+          false,
+          clipboardFixture.editor as Editor,
+          asMarkdownFileInfo({ file: sourceFile })
+        )
+      ).toBe(true);
+      if (completion === undefined) {
+        throw new TypeError('Expected the repeat-state clipboard promise.');
+      }
+      await completion;
+
+      const repeated = createEditor(
+        testCase.repeatSource,
+        testCase.repeatSource.indexOf(testCase.repeatTarget)
+      );
+      expect(
+        commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+          false,
+          repeated.editor as Editor,
+          {} as PublicMarkdownView
+        )
+      ).toBe(true);
+      expect(repeated.editor.getValue()).toBe(testCase.expected);
+    }
+  );
+
+  it('matches Delete current section with one registered Cut edit and one cursor placement', async () => {
+    const app = ObsidianApp.createConfigured__({
+      files: { [CLIPBOARD_SOURCE_PATH]: CLIPBOARD_SOURCE }
+    });
+    const sourceFile = app.vault.getAbstractFileByPath(CLIPBOARD_SOURCE_PATH);
+    if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+      throw new TypeError('Expected the one-edit Cut source file.');
+    }
+    let completion: Promise<void> | undefined;
+    const commands = getRegisteredCommands(
+      loadPluginCommands(
+        asApp(app),
+        undefined,
+        undefined,
+        {
+          execute: executeSectionClipboard,
+          notify: vi.fn(),
+          observeExecution(execution) {
+            completion = execution;
+          },
+          writeText: vi.fn(noopAsync)
+        }
+      )
+    );
+    const deletion = createEditor(
+      CLIPBOARD_SOURCE,
+      CLIPBOARD_SOURCE.indexOf('body')
+    );
+    const cut = createEditor(CLIPBOARD_SOURCE, CLIPBOARD_SOURCE.indexOf('body'));
+
+    commands.get('delete-current-section')?.editorCallback?.(
+      deletion.editor as Editor,
+      {} as PublicMarkdownView
+    );
+    expect(
+      commands.get('cut-current-section')?.editorCheckCallback?.(
+        false,
+        cut.editor as Editor,
+        asMarkdownFileInfo({ editor: cut.editor, file: sourceFile })
+      )
+    ).toBe(true);
+    if (completion === undefined) {
+      throw new TypeError('Expected the one-edit Cut promise.');
+    }
+    await completion;
+
+    expect(cut.editor.getValue()).toBe(deletion.editor.getValue());
+    expect(cut.editor.getValue()).toBe('# Keep\nkeep\n');
+    expect(cut.replaceRange).toHaveBeenCalledOnce();
+    expect(cut.replaceRange).toHaveBeenCalledWith(
+      '',
+      { ch: 0, line: 0 },
+      { ch: CLIPBOARD_TEXT.length, line: 0 }
+    );
+    expect(cut.setCursor).toHaveBeenCalledExactlyOnceWith({ ch: 0, line: 0 });
+  });
+
+  it.each(
+    [
+      {
+        expectedNotice: 'Section copied, but the section could not be cut.',
+        mutation: 'none'
+      },
+      {
+        expectedNotice: 'Section copied, but the cut could not be verified.',
+        mutation: 'partial'
+      }
+    ] as const
+  )(
+    'does not add a rollback edit when Cut replacement throws after $mutation mutation',
+    async ({ expectedNotice, mutation }) => {
+      const app = ObsidianApp.createConfigured__({
+        files: { [CLIPBOARD_SOURCE_PATH]: CLIPBOARD_SOURCE }
+      });
+      const sourceFile = app.vault.getAbstractFileByPath(CLIPBOARD_SOURCE_PATH);
+      if (!(sourceFile instanceof PublicTFile) || !(sourceFile instanceof TFile)) {
+        throw new TypeError('Expected the failed one-edit Cut source file.');
+      }
+      const fixture = createEditor(
+        CLIPBOARD_SOURCE,
+        CLIPBOARD_SOURCE.indexOf('body')
+      );
+      let currentSource = CLIPBOARD_SOURCE;
+      vi.mocked(fixture.editor.getValue).mockImplementation(() => currentSource);
+      fixture.replaceRange.mockImplementation(() => {
+        if (mutation === 'partial') {
+          currentSource = 'Copy me\nbody\n# Keep\nkeep\n';
+        }
+        throw new Error('replace failed');
+      });
+      let completion: Promise<void> | undefined;
+      const notify = vi.fn();
+      const commands = getRegisteredCommands(
+        loadPluginCommands(
+          asApp(app),
+          undefined,
+          undefined,
+          {
+            execute: executeSectionClipboard,
+            notify,
+            observeExecution(execution) {
+              completion = execution;
+            },
+            writeText: vi.fn(noopAsync)
+          }
+        )
+      );
+
+      expect(
+        commands.get('cut-current-section')?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          asMarkdownFileInfo({ editor: fixture.editor, file: sourceFile })
+        )
+      ).toBe(true);
+      if (completion === undefined) {
+        throw new TypeError('Expected the failed one-edit Cut promise.');
+      }
+      await completion;
+
+      expect(fixture.replaceRange).toHaveBeenCalledOnce();
+      expect(fixture.setCursor).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledExactlyOnceWith(expectedNotice);
+    }
+  );
 
   it('preserves editor and planning failure boundaries in registered structural checks', () => {
     const source = '## One\none\n## Two\ntwo\n';

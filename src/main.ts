@@ -9,6 +9,8 @@ import { MarkdownView, normalizePath, Notice, Plugin, TFile, TFolder } from 'obs
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import type { DeletionMode, DeletionRange, DeletionTarget } from './deletion-planner.ts';
 import type { MarkdownBlockKind } from './markdown-structure.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible clipboard imports compact.
+import type { SectionClipboardResult, SectionClipboardRuntime } from './section-clipboard-executor.ts';
 import type {
   ExtractionCreateResult,
   ExtractionEditor,
@@ -24,9 +26,11 @@ import {
   collectDeletionTargets,
   planContextualDeletion,
   planContextualDeletionWithContext,
-  planSectionDeletion
+  planSectionDeletion,
+  planSectionDeletionWithContext
 } from './deletion-planner.ts';
 import { openDeletionTargetPicker } from './deletion-target-modal.ts';
+import { executeSectionClipboard } from './section-clipboard-executor.ts';
 import {
   isSectionExtractionAvailable,
   isSectionExtractionAvailableWithContext
@@ -117,6 +121,13 @@ export interface ExtractionCommandDependencies {
   observeExecution(execution: Promise<void>): void;
 }
 
+export interface SectionClipboardCommandDependencies {
+  execute: typeof executeSectionClipboard;
+  notify(message: string): void;
+  observeExecution(execution: Promise<void>): void;
+  writeText(text: string): Promise<void>;
+}
+
 const DEFAULT_EXTRACTION_COMMAND_DEPENDENCIES: ExtractionCommandDependencies = {
   execute: executeSectionExtraction,
   notify(message) {
@@ -126,6 +137,24 @@ const DEFAULT_EXTRACTION_COMMAND_DEPENDENCIES: ExtractionCommandDependencies = {
     execution.catch(() => undefined);
   }
 };
+
+const DEFAULT_SECTION_CLIPBOARD_DEPENDENCIES = {
+  execute: executeSectionClipboard,
+  notify(message: string): void {
+    new Notice(message);
+  },
+  observeExecution(execution: Promise<void>): void {
+    execution.catch(() => undefined);
+  },
+  writeText(text: string): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition, n/no-unsupported-features/node-builtins -- Obsidian may run without the browser Clipboard API.
+    if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
+      return Promise.reject(new Error('Clipboard API unavailable'));
+    }
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- Obsidian provides the browser Clipboard API when available.
+    return navigator.clipboard.writeText(text);
+  }
+} satisfies SectionClipboardCommandDependencies;
 
 const DELETION_COMMANDS: readonly DeleteCommand[] = [
   {
@@ -139,6 +168,19 @@ const DELETION_COMMANDS: readonly DeleteCommand[] = [
     name: 'Delete current heading block'
   }
 ];
+
+const SECTION_CLIPBOARD_COMMANDS = [
+  {
+    id: 'copy-current-section',
+    mode: 'copy',
+    name: 'Copy current section'
+  },
+  {
+    id: 'cut-current-section',
+    mode: 'cut',
+    name: 'Cut current section'
+  }
+] as const;
 
 const MOVEMENT_COMMANDS = [
   {
@@ -198,16 +240,19 @@ export default class SectionalsPlugin extends Plugin {
   private readonly extractionDependencies: ExtractionCommandDependencies;
   private lastStructuralAction: null | StructuralAction = null;
   private readonly planningContextProvider: StructuralPlanningContextProvider;
+  private readonly sectionClipboardDependencies: SectionClipboardCommandDependencies;
 
   public constructor(
     app: App,
     manifest: PluginManifest,
     extractionDependencies: ExtractionCommandDependencies = DEFAULT_EXTRACTION_COMMAND_DEPENDENCIES,
-    planningContextProvider: StructuralPlanningContextProvider = createEphemeralStructuralPlanningContextProvider()
+    planningContextProvider: StructuralPlanningContextProvider = createEphemeralStructuralPlanningContextProvider(),
+    sectionClipboardDependencies: SectionClipboardCommandDependencies = DEFAULT_SECTION_CLIPBOARD_DEPENDENCIES
   ) {
     super(app, manifest);
     this.extractionDependencies = extractionDependencies;
     this.planningContextProvider = planningContextProvider;
+    this.sectionClipboardDependencies = sectionClipboardDependencies;
   }
 
   public override onload(): void {
@@ -255,6 +300,57 @@ export default class SectionalsPlugin extends Plugin {
       id: 'delete-current-structure',
       name: 'Delete current structure…'
     });
+
+    for (const command of SECTION_CLIPBOARD_COMMANDS) {
+      this.addCommand({
+        editorCheckCallback: (isChecking, editor, context) => {
+          const sourceFile = context.file;
+          if (sourceFile === null) {
+            return false;
+          }
+          if (isChecking) {
+            return isSectionClipboardAvailableForCheck(
+              editor,
+              this.planningContextProvider
+            );
+          }
+
+          let cursorOffset: number;
+          try {
+            cursorOffset = editor.posToOffset(editor.getCursor('head'));
+          } catch {
+            return false;
+          }
+          const expectedSourcePath = normalizePath(sourceFile.path);
+          const expectedContextEditor = context.editor;
+          const expectedEditor = editor;
+          const expectedActiveEditor = this.app.workspace.activeEditor;
+          const expectedActiveEditorFile = expectedActiveEditor?.file;
+          const expectedActiveEditorEditor = expectedActiveEditor?.editor;
+          const execution = runSectionClipboardCommand(
+            expectedEditor,
+            cursorOffset,
+            command.mode,
+            createSectionClipboardRuntime(
+              this.app,
+              sourceFile,
+              expectedSourcePath,
+              context,
+              expectedContextEditor,
+              expectedActiveEditor,
+              expectedActiveEditorFile,
+              expectedActiveEditorEditor,
+              (text) => this.sectionClipboardDependencies.writeText(text)
+            ),
+            this.sectionClipboardDependencies
+          );
+          this.sectionClipboardDependencies.observeExecution(execution);
+          return true;
+        },
+        id: command.id,
+        name: command.name
+      });
+    }
 
     for (const command of MOVEMENT_COMMANDS) {
       this.addCommand({
@@ -426,6 +522,34 @@ export default class SectionalsPlugin extends Plugin {
   }
 }
 
+export function formatSectionClipboardNotice(
+  result: SectionClipboardResult
+  // eslint-disable-next-line perfectionist/sort-union-types -- Preserve the approved public return type.
+): string | null {
+  /* eslint-disable default-case, perfectionist/sort-switch-case, unicorn/switch-case-braces -- Preserve the approved result order and concise exhaustive mapping. */
+  switch (result.status) {
+    case 'copied':
+      return 'Section copied.';
+    case 'cut':
+      return 'Section cut.';
+    case 'operation-failed':
+      return 'Could not read the current section.';
+    case 'clipboard-failed':
+      return 'Could not copy the section to the clipboard.';
+    case 'source-changed':
+      return 'Section copied, but the note changed before it could be cut.';
+    case 'cut-failed':
+      return 'Section copied, but the section could not be cut.';
+    case 'cut-unverified':
+      return 'Section copied, but the cut could not be verified.';
+    case 'cut-cursor-failed':
+      return 'Section cut, but the cursor could not be restored.';
+    case 'unavailable':
+      return null;
+  }
+  /* eslint-enable default-case, perfectionist/sort-switch-case, unicorn/switch-case-braces -- Clipboard result mapping is complete. */
+}
+
 export function formatExtractionNotice(
   details: ExtractionNoticeDetails
 ): string {
@@ -438,6 +562,40 @@ export function formatExtractionNotice(
   }
   const retainedPath = details.path;
   return template.replace('{path}', () => retainedPath);
+}
+
+function createSectionClipboardRuntime(
+  app: App,
+  sourceFile: TFile,
+  expectedSourcePath: string,
+  context: MarkdownFileInfo,
+  expectedContextEditor: Editor | undefined,
+  expectedActiveEditor: MarkdownFileInfo | null,
+  expectedActiveEditorFile: null | TFile | undefined,
+  expectedActiveEditorEditor: Editor | undefined,
+  writeText: SectionClipboardCommandDependencies['writeText']
+): SectionClipboardRuntime {
+  return {
+    isOriginCurrent(): boolean {
+      try {
+        return context.file === sourceFile
+          && context.editor === expectedContextEditor
+          && sourceFile.path === expectedSourcePath
+          && app.vault.getAbstractFileByPath(expectedSourcePath) === sourceFile
+          && app.workspace.activeEditor === expectedActiveEditor
+          && (
+            expectedActiveEditor === null
+            || (
+              expectedActiveEditor.file === expectedActiveEditorFile
+              && expectedActiveEditor.editor === expectedActiveEditorEditor
+            )
+          );
+      } catch {
+        return false;
+      }
+    },
+    writeText
+  };
 }
 
 function createGuardedExtractionEditor(
@@ -561,6 +719,23 @@ function isExtractionAvailableForCheck(
   }
 }
 
+function isSectionClipboardAvailableForCheck(
+  editor: SectionEditor,
+  planningContextProvider: StructuralPlanningContextProvider
+): boolean {
+  const source = editor.getValue();
+  const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+  try {
+    return planSectionDeletionWithContext(
+      planningContextProvider(editor, source),
+      cursorOffset,
+      'section'
+    ) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function isStructuralActionAvailable(
   editor: SectionEditor,
   action: StructuralAction,
@@ -643,6 +818,29 @@ function createExtractionRuntime(app: App): ExtractionRuntime<TFile> {
       return file instanceof TFile ? file : null;
     }
   };
+}
+
+async function runSectionClipboardCommand(
+  editor: SectionEditor,
+  cursorOffset: number,
+  mode: 'copy' | 'cut',
+  runtime: SectionClipboardRuntime,
+  dependencies: SectionClipboardCommandDependencies
+): Promise<void> {
+  const result = await dependencies.execute(
+    editor,
+    cursorOffset,
+    mode,
+    runtime
+  );
+  const message = formatSectionClipboardNotice(result);
+  if (message !== null) {
+    try {
+      dependencies.notify(message);
+    } catch {
+      // Notice failures must not become unhandled command rejections.
+    }
+  }
 }
 
 async function runExtractionCommand(
