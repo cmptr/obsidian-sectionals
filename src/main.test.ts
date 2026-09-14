@@ -1316,6 +1316,65 @@ describe('SectionalsPlugin', () => {
     [
       {
         activeEditorState: 'null',
+        configure(harness: ClipboardCommandHarness): void {
+          harness.context.editor = harness.alternateEditor.editor as Editor;
+        },
+        contextEditorState: 'present',
+        name: 'the defined context editor is another editor'
+      },
+      {
+        activeEditorState: 'object',
+        configure(harness: ClipboardCommandHarness): void {
+          if (harness.activeEditor === null) {
+            throw new TypeError('Expected an active workspace editor.');
+          }
+          harness.activeEditor.file = harness.otherFile;
+        },
+        contextEditorState: 'present',
+        name: 'the active workspace editor has another file'
+      },
+      {
+        activeEditorState: 'object',
+        configure(harness: ClipboardCommandHarness): void {
+          if (harness.activeEditor === null) {
+            throw new TypeError('Expected an active workspace editor.');
+          }
+          harness.activeEditor.editor = harness.alternateEditor.editor as Editor;
+        },
+        contextEditorState: 'present',
+        name: 'the active workspace editor has another editor'
+      }
+    ] as const
+  )(
+    'copies the invocation snapshot but cancels Cut when $name at invocation',
+    async ({ activeEditorState, configure, contextEditorState }) => {
+      const harness = createClipboardCommandHarness(
+        contextEditorState,
+        activeEditorState
+      );
+      configure(harness);
+
+      invokeClipboardCut(harness);
+
+      expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+      expect(harness.fixture.setCursor).not.toHaveBeenCalled();
+      expect(harness.notify).not.toHaveBeenCalled();
+
+      await completeClipboardCommand(harness);
+
+      expect(harness.writeText).toHaveBeenCalledExactlyOnceWith(CLIPBOARD_TEXT);
+      expect(harness.fixture.replaceRange).not.toHaveBeenCalled();
+      expect(harness.fixture.setCursor).not.toHaveBeenCalled();
+      expect(harness.notify).toHaveBeenCalledExactlyOnceWith(
+        'Section copied, but the note changed before it could be cut.'
+      );
+    }
+  );
+
+  it.each(
+    [
+      {
+        activeEditorState: 'null',
         contextEditorState: 'present',
         async mutate(harness: ClipboardCommandHarness): Promise<void> {
           await noopAsync();

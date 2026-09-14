@@ -337,6 +337,7 @@ export default class SectionalsPlugin extends Plugin {
               expectedSourcePath,
               context,
               expectedContextEditor,
+              expectedEditor,
               expectedActiveEditor,
               expectedActiveEditorFile,
               expectedActiveEditorEditor,
@@ -570,6 +571,7 @@ function createSectionClipboardRuntime(
   expectedSourcePath: string,
   context: MarkdownFileInfo,
   expectedContextEditor: Editor | undefined,
+  expectedEditor: Editor,
   expectedActiveEditor: MarkdownFileInfo | null,
   expectedActiveEditorFile: null | TFile | undefined,
   expectedActiveEditorEditor: Editor | undefined,
@@ -580,6 +582,10 @@ function createSectionClipboardRuntime(
       try {
         return context.file === sourceFile
           && context.editor === expectedContextEditor
+          && (
+            expectedContextEditor === undefined
+            || expectedContextEditor === expectedEditor
+          )
           && sourceFile.path === expectedSourcePath
           && app.vault.getAbstractFileByPath(expectedSourcePath) === sourceFile
           && app.workspace.activeEditor === expectedActiveEditor
@@ -587,7 +593,9 @@ function createSectionClipboardRuntime(
             expectedActiveEditor === null
             || (
               expectedActiveEditor.file === expectedActiveEditorFile
+              && expectedActiveEditorFile === sourceFile
               && expectedActiveEditor.editor === expectedActiveEditorEditor
+              && expectedActiveEditorEditor === expectedEditor
             )
           );
       } catch {
