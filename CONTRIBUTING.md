@@ -66,8 +66,13 @@ Before a release, complete this manual mobile smoke test. CI does not run it.
 1. Run `make link VAULT=/absolute/path/to/test-vault`, or copy `dist/main.js` and `dist/manifest.json` to a mobile test vault.
 2. Load and enable Sectionals on current Android or iOS Obsidian.
 3. Invoke one deletion, one movement, one hierarchy change, linked extraction, and open extraction.
-4. Verify command availability, one-step editor Undo for in-buffer actions, destination retention rules, and no startup console error.
-5. Record the platform, OS, and Obsidian versions in the release review.
+4. Run Copy and Cut on root, quoted, and callout sections.
+5. Verify clipboard permission success and denial, and one-step editor Undo after Cut.
+6. Verify exact clipboard text for Setext headings and CRLF notes.
+7. Where reproducible, change the source note while clipboard access is pending and verify that Cut cancels deletion.
+8. Restart the plugin and verify that it retains no clipboard state.
+9. Verify command availability, destination retention rules, and no startup console error.
+10. Record the platform, OS, and Obsidian versions in the release review.
 
 ## Open a pull request
 

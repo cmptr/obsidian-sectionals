@@ -2,7 +2,7 @@
 
 Edit Markdown by structure, not selection.
 
-Sectionals gives Obsidian a small set of commands for acting on complete parts of a note. Delete a callout, move a section, extract a section into another note, or repeat a movement without selecting the exact lines first.
+Sectionals gives Obsidian 17 commands for acting on complete parts of a note. Delete a callout, copy a section, move a section, extract a section into another note, or repeat a movement without selecting the exact lines first.
 
 ## Installation
 
@@ -40,6 +40,15 @@ A section includes its heading, body, and nested subsections. A heading block in
 | **Delete current structure…**        | Lets you choose when several removable structures apply. |
 
 Every deletion is one undoable edit.
+
+### Clipboard
+
+| Command                  | Result                                                         |
+| ------------------------ | -------------------------------------------------------------- |
+| **Copy current section** | Copies the complete section exactly as written.                |
+| **Cut current section**  | Copies the complete section, then removes it in one undo step. |
+
+Quoted and callout sections use the same scope as **Delete current section**. If the note changes while clipboard access is pending, Cut cancels the deletion. Neither Copy nor Cut changes the action remembered by **Repeat last structural action**.
 
 ### Move
 

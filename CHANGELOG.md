@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add commands to copy or cut the current section, with clipboard completion required before Cut removes source text.
+
 ## 0.3.0
 
 - Add commands to promote or demote complete section hierarchies and repeat those changes.
