@@ -1,7 +1,8 @@
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible Vitest imports compact.
 import { describe, expect, it } from 'vitest';
 
-import type { MarkdownHeading } from './markdown-structure.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible type imports compact.
+import type { MarkdownHeading, MarkdownHeadingSyntax } from './markdown-structure.ts';
 import type { SectionNavigationMode } from './section-navigation-planner.ts';
 import type { MarkdownSection } from './section-query.ts';
 import type { StructuralPlanningContext } from './structural-planning-context.ts';
@@ -9,6 +10,16 @@ import type { StructuralPlanningContext } from './structural-planning-context.ts
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import { planSectionNavigation, planSectionNavigationWithContext } from './section-navigation-planner.ts';
 import { createStructuralPlanningContext } from './structural-planning-context.ts';
+
+interface SetextHeading extends MarkdownHeading {
+  readonly syntax: SetextHeadingSyntax;
+}
+
+type SetextHeadingSyntax = Extract<MarkdownHeadingSyntax, SetextSyntaxKind>;
+
+interface SetextSyntaxKind {
+  readonly kind: 'setext';
+}
 
 function contextWithHeading(
   context: StructuralPlanningContext,
@@ -248,6 +259,12 @@ describe('section navigation planning', () => {
     expectPlan(source, 2, 'first-child', 11);
   });
 
+  it('places an ATX cursor before a marked title and closing marker', () => {
+    const source = '# Parent\n## *Marked* ###\n';
+
+    expectPlan(source, 2, 'first-child', 12);
+  });
+
   it('places a quoted ATX cursor after its marker and whitespace', () => {
     const source = '> # Parent\n> ## \t*Child*\n';
 
@@ -288,6 +305,45 @@ describe('section navigation planning', () => {
     expectPlan(source, 23, 'parent', 0);
   });
 
+  it('rejects an ATX marker shorter than its runtime level', () => {
+    const source = '# Parent\n## Child\n';
+    const context = createStructuralPlanningContext(source);
+    const child = context.sections[1];
+    expect(child).toBeDefined();
+    if (child?.heading.syntax.kind !== 'atx') {
+      throw new Error('expected ATX child fixture');
+    }
+    const betweenMarkers = contextWithHeading(context, 1, {
+      ...child.heading,
+      syntax: {
+        kind: 'atx',
+        openingMarkerRange: { from: 9, to: 10 }
+      }
+    });
+
+    expect(
+      planSectionNavigationWithContext(betweenMarkers, 2, 'first-child')
+    ).toBeNull();
+  });
+
+  it.each([0, 7])('rejects runtime ATX level %s', (level) => {
+    const source = '# Parent\n## Child\n';
+    const context = createStructuralPlanningContext(source);
+    const child = context.sections[1];
+    expect(child).toBeDefined();
+    if (child?.heading.syntax.kind !== 'atx') {
+      throw new Error('expected ATX child fixture');
+    }
+    const malformed = contextWithHeading(context, 1, {
+      ...child.heading,
+      level: level as MarkdownHeading['level']
+    });
+
+    expect(
+      planSectionNavigationWithContext(malformed, 2, 'first-child')
+    ).toBeNull();
+  });
+
   it('rejects malformed ATX syntax ranges from a supplied context', () => {
     const source = '# Parent\n## Child\n';
     const context = createStructuralPlanningContext(source);
@@ -314,6 +370,118 @@ describe('section navigation planning', () => {
     });
     expect(
       planSectionNavigationWithContext(unsafeSyntaxEnd, 2, 'first-child')
+    ).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'runtime level zero',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        level: 0 as MarkdownHeading['level']
+      })
+    },
+    {
+      name: 'runtime level three',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        level: 3
+      })
+    },
+    {
+      name: 'empty underline marker',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        syntax: {
+          ...heading.syntax,
+          underlineMarkerRange: { from: 15, to: 15 }
+        }
+      })
+    },
+    {
+      name: 'wrong underline character',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        level: 1
+      })
+    },
+    {
+      name: 'title range on the underline',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        syntax: {
+          ...heading.syntax,
+          titleRanges: [
+            { from: 9, to: 14 },
+            { from: 15, to: 15 }
+          ]
+        }
+      })
+    },
+    {
+      name: 'title range inside the underline before an empty marker',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        syntax: {
+          ...heading.syntax,
+          titleRanges: [
+            { from: 9, to: 14 },
+            { from: 15, to: 16 }
+          ],
+          underlineMarkerRange: { from: 20, to: 20 }
+        }
+      })
+    },
+    {
+      name: 'first title range after syntax start',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        syntax: {
+          ...heading.syntax,
+          titleRanges: [{ from: 10, to: 14 }]
+        }
+      })
+    },
+    {
+      name: 'line prefix not mapped by the source',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        syntax: { ...heading.syntax, linePrefix: '> ' }
+      })
+    },
+    {
+      name: 'line ending not mapped by the source',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        syntax: { ...heading.syntax, lineEnding: '\r\n' }
+      })
+    },
+    {
+      name: 'non-whitespace trailing underline syntax',
+      update: (heading: SetextHeading): MarkdownHeading => ({
+        ...heading,
+        syntax: {
+          ...heading.syntax,
+          underlineMarkerRange: { from: 15, to: 19 }
+        }
+      })
+    }
+  ])('rejects malformed Setext syntax with $name', ({ update }) => {
+    const source = '# Parent\nChild\n-----\n';
+    const context = createStructuralPlanningContext(source);
+    const child = context.sections[1];
+    expect(child).toBeDefined();
+    if (child?.heading.syntax.kind !== 'setext') {
+      throw new Error('expected Setext child fixture');
+    }
+    const heading: SetextHeading = {
+      ...child.heading,
+      syntax: child.heading.syntax
+    };
+    const malformed = contextWithHeading(context, 1, update(heading));
+
+    expect(
+      planSectionNavigationWithContext(malformed, 2, 'first-child')
     ).toBeNull();
   });
 

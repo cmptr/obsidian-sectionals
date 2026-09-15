@@ -12,6 +12,10 @@ import {
 } from './section-query.ts';
 import { createStructuralPlanningContext } from './structural-planning-context.ts';
 
+const MAX_HEADING_LEVEL = 6;
+const MAX_SETEXT_HEADING_LEVEL = 2;
+const MIN_HEADING_LEVEL = 1;
+
 export type SectionNavigationMode =
   | 'first-child'
   | 'next-sibling'
@@ -57,6 +61,29 @@ export function planSectionNavigationWithContext(
   return destinationOffset === null ? null : { cursorOffset: destinationOffset };
 }
 
+function areSetextTitleRangesValid(
+  source: string,
+  heading: MarkdownHeading,
+  titleRanges: readonly MarkdownRange[],
+  underlineMarkerRange: MarkdownRange
+): boolean {
+  let previousRangeEnd = heading.lineStart;
+  for (const titleRange of titleRanges) {
+    const title = source.slice(titleRange.from, titleRange.to);
+    if (
+      !isRangeWithinHeading(source, heading, titleRange)
+      || titleRange.from < previousRangeEnd
+      || titleRange.to >= underlineMarkerRange.from
+      || title.includes('\n')
+      || title.includes('\r')
+    ) {
+      return false;
+    }
+    previousRangeEnd = titleRange.to;
+  }
+  return true;
+}
+
 function findAtxTitleOffset(
   source: string,
   heading: MarkdownHeading
@@ -67,10 +94,12 @@ function findAtxTitleOffset(
 
   const marker = heading.syntax.openingMarkerRange;
   if (
-    !isRangeWithinHeading(source, heading, marker)
+    !Number.isSafeInteger(heading.level)
+    || heading.level < MIN_HEADING_LEVEL
+    || heading.level > MAX_HEADING_LEVEL
+    || !isRangeWithinHeading(source, heading, marker)
     || marker.from !== heading.syntaxStart
-    || marker.from === marker.to
-    || !/^#+$/u.test(source.slice(marker.from, marker.to))
+    || source.slice(marker.from, marker.to) !== '#'.repeat(heading.level)
   ) {
     return null;
   }
@@ -152,26 +181,14 @@ function findSetextTitleOffset(
   source: string,
   heading: MarkdownHeading
 ): null | number {
-  if (heading.syntax.kind !== 'setext') {
-    return null;
-  }
-
-  const { titleRanges, underlineMarkerRange } = heading.syntax;
   if (
-    titleRanges.length === 0
-    || !isRangeWithinHeading(source, heading, underlineMarkerRange)
-    || titleRanges.some((range, index) =>
-      !isRangeWithinHeading(source, heading, range)
-      || source.slice(range.from, range.to).includes('\n')
-      || source.slice(range.from, range.to).includes('\r')
-      || range.to > underlineMarkerRange.from
-      || (index > 0 && range.from < (titleRanges[index - 1]?.to ?? 0))
-    )
+    heading.syntax.kind !== 'setext'
+    || !isSetextHeadingValid(source, heading)
   ) {
     return null;
   }
 
-  for (const range of titleRanges) {
+  for (const range of heading.syntax.titleRanges) {
     for (let offset = range.from; offset < range.to; offset += 1) {
       if (source[offset] !== ' ' && source[offset] !== '\t') {
         return offset;
@@ -185,11 +202,19 @@ function isHeadingSyntaxRangeSafe(
   source: string,
   heading: MarkdownHeading
 ): boolean {
-  return Number.isSafeInteger(heading.syntaxStart)
+  return Number.isSafeInteger(heading.lineStart)
+    && Number.isSafeInteger(heading.syntaxStart)
     && Number.isSafeInteger(heading.syntaxEnd)
-    && heading.syntaxStart >= 0
+    && heading.lineStart >= 0
+    && heading.lineStart <= heading.syntaxStart
     && heading.syntaxStart <= heading.syntaxEnd
-    && heading.syntaxEnd <= source.length;
+    && heading.syntaxEnd <= source.length
+    && (heading.lineStart === 0 || source[heading.lineStart - 1] === '\n')
+    && (
+      heading.syntaxEnd === source.length
+      || source[heading.syntaxEnd] === '\n'
+      || source.startsWith('\r\n', heading.syntaxEnd)
+    );
 }
 
 function isOffsetWithinHeading(
@@ -213,4 +238,56 @@ function isRangeWithinHeading(
     && range.from <= range.to
     && isOffsetWithinHeading(source, heading, range.from)
     && isOffsetWithinHeading(source, heading, range.to);
+}
+
+function isSetextHeadingValid(
+  source: string,
+  heading: MarkdownHeading
+): boolean {
+  if (
+    heading.syntax.kind !== 'setext'
+    || (
+      heading.level !== MIN_HEADING_LEVEL
+      && heading.level !== MAX_SETEXT_HEADING_LEVEL
+    )
+    || heading.syntax.titleRanges.length === 0
+  ) {
+    return false;
+  }
+
+  const { titleRanges, underlineMarkerRange } = heading.syntax;
+  const firstTitleRange = titleRanges[0];
+  if (
+    firstTitleRange === undefined
+    || (
+      heading.syntax.lineEnding === ''
+        ? heading.syntaxEnd !== source.length
+        : !source.startsWith(heading.syntax.lineEnding, heading.syntaxEnd)
+    )
+    || firstTitleRange.from !== heading.syntaxStart
+    || source.slice(heading.lineStart, firstTitleRange.from)
+      !== heading.syntax.linePrefix
+    || !isRangeWithinHeading(source, heading, underlineMarkerRange)
+    || !areSetextTitleRangesValid(
+      source,
+      heading,
+      titleRanges,
+      underlineMarkerRange
+    )
+  ) {
+    return false;
+  }
+
+  const markerCharacter = heading.level === MIN_HEADING_LEVEL ? '=' : '-';
+  const marker = source.slice(
+    underlineMarkerRange.from,
+    underlineMarkerRange.to
+  );
+  const trailingSyntax = source.slice(
+    underlineMarkerRange.to,
+    heading.syntaxEnd
+  );
+  return marker !== ''
+    && marker === markerCharacter.repeat(marker.length)
+    && /^[\t ]*$/u.test(trailingSyntax);
 }
