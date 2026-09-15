@@ -18,6 +18,8 @@ import type {
   ExtractionNoticeDetails,
   ExtractionRuntime
 } from './section-extraction-executor.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible navigation imports compact.
+import type { SectionNavigationMode, SectionNavigationPlan } from './section-navigation-planner.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible structural action imports compact.
 import type { StructuralAction, StructuralEditPlan } from './structural-action.ts';
 import type { StructuralPlanningContextProvider } from './structural-planning-context.ts';
@@ -40,6 +42,8 @@ import {
   ExtractionPreDelegationSourceChangedError,
   ExtractionSourceChangedError
 } from './section-extraction-executor.ts';
+// eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
+import { planSectionNavigation, planSectionNavigationWithContext } from './section-navigation-planner.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible planner imports compact.
 import { planStructuralAction, planStructuralActionWithContext } from './structural-action-planner.ts';
 import { createEphemeralStructuralPlanningContextProvider } from './structural-planning-context.ts';
@@ -80,6 +84,11 @@ interface ExtractionOrigin {
   readonly leaf: WorkspaceLeaf;
   readonly view: MarkdownView;
 }
+type NavigationPlanner = (
+  source: string,
+  cursorOffset: number,
+  mode: SectionNavigationMode
+) => null | SectionNavigationPlan;
 type Notify = (message: string) => void;
 type OpenStructureTargetPicker = (
   app: App,
@@ -202,6 +211,29 @@ const MOVEMENT_COMMANDS = [
     id: 'move-current-section-to-end',
     mode: 'end',
     name: 'Move current section to end'
+  }
+] as const;
+
+const NAVIGATION_COMMANDS = [
+  {
+    id: 'go-to-parent-section',
+    mode: 'parent',
+    name: 'Go to parent section'
+  },
+  {
+    id: 'go-to-previous-sibling-section',
+    mode: 'previous-sibling',
+    name: 'Go to previous sibling section'
+  },
+  {
+    id: 'go-to-next-sibling-section',
+    mode: 'next-sibling',
+    name: 'Go to next sibling section'
+  },
+  {
+    id: 'go-to-first-child-section',
+    mode: 'first-child',
+    name: 'Go to first child section'
   }
 ] as const;
 
@@ -374,6 +406,27 @@ export default class SectionalsPlugin extends Plugin {
             (successfulAction) => {
               this.lastStructuralAction = successfulAction;
             }
+          );
+        },
+        id: command.id,
+        name: command.name
+      });
+    }
+
+    for (const command of NAVIGATION_COMMANDS) {
+      this.addCommand({
+        editorCheckCallback: (isChecking, editor) => {
+          if (isChecking) {
+            return isSectionNavigationAvailable(
+              editor,
+              command.mode,
+              this.planningContextProvider
+            );
+          }
+          return checkAndExecuteSectionNavigation(
+            false,
+            editor,
+            command.mode
           );
         },
         id: command.id,
@@ -727,6 +780,22 @@ function isExtractionAvailableForCheck(
   }
 }
 
+function isSectionNavigationAvailable(
+  editor: SectionEditor,
+  mode: SectionNavigationMode,
+  planningContextProvider: StructuralPlanningContextProvider
+): boolean {
+  try {
+    const source = editor.getValue();
+    const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+    const context = planningContextProvider(editor, source);
+    return planSectionNavigationWithContext(context, cursorOffset, mode)
+      !== null;
+  } catch {
+    return false;
+  }
+}
+
 function isSectionClipboardAvailableForCheck(
   editor: SectionEditor,
   planningContextProvider: StructuralPlanningContextProvider
@@ -883,6 +952,29 @@ async function runExtractionCommand(
         // Notice failures must not become unhandled command rejections.
       }
     }
+  }
+}
+
+export function checkAndExecuteSectionNavigation(
+  isChecking: boolean,
+  editor: SectionEditor,
+  mode: SectionNavigationMode,
+  planner: NavigationPlanner = planSectionNavigation
+): boolean {
+  try {
+    const source = editor.getValue();
+    const cursorOffset = editor.posToOffset(editor.getCursor('head'));
+    const plan = planner(source, cursorOffset, mode);
+    if (plan === null) {
+      return false;
+    }
+    if (!isChecking) {
+      const destination = editor.offsetToPos(plan.cursorOffset);
+      editor.setCursor(destination);
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
