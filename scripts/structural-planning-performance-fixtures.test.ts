@@ -8,6 +8,7 @@ import { isSectionExtractionAvailableWithContext } from '../src/section-extracti
 import { planSectionExtraction } from '../src/section-extraction-planner.ts';
 import { planSectionHierarchyChangeWithContext } from '../src/section-hierarchy-planner.ts';
 import { planSectionMovementWithContext } from '../src/section-movement-planner.ts';
+import { planSectionNavigationWithContext } from '../src/section-navigation-planner.ts';
 import {
   createEphemeralStructuralPlanningContextProvider,
   createStructuralPlanningContext
@@ -41,6 +42,31 @@ function expectSharedWorkloadResults(
 ): void {
   const source = getContext().source;
   const offsets = getFixtureOffsets(source);
+
+  expect(
+    planSectionNavigationWithContext(getContext(), offsets.target, 'parent')
+  ).toEqual({ cursorOffset: source.indexOf('Planning fixture') });
+  expect(
+    planSectionNavigationWithContext(
+      getContext(),
+      offsets.target,
+      'previous-sibling'
+    )
+  ).toEqual({ cursorOffset: source.indexOf('Flat alpha') });
+  expect(
+    planSectionNavigationWithContext(
+      getContext(),
+      offsets.target,
+      'next-sibling'
+    )
+  ).toEqual({ cursorOffset: source.indexOf('Flat omega') });
+  expect(
+    planSectionNavigationWithContext(
+      getContext(),
+      offsets.target,
+      'first-child'
+    )
+  ).toEqual({ cursorOffset: source.indexOf('Nested target child') });
 
   for (const mode of ['up', 'down', 'start', 'end'] as const) {
     expect(

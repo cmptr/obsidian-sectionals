@@ -9,6 +9,7 @@ import { isSectionExtractionAvailableWithContext } from '../src/section-extracti
 import { planSectionExtraction } from '../src/section-extraction-planner.ts';
 import { planSectionHierarchyChangeWithContext } from '../src/section-hierarchy-planner.ts';
 import { planSectionMovementWithContext } from '../src/section-movement-planner.ts';
+import { planSectionNavigationWithContext } from '../src/section-navigation-planner.ts';
 import { createStructuralPlanningContext } from '../src/structural-planning-context.ts';
 // eslint-disable-next-line @stylistic/object-curly-newline -- Keep formatter-compatible fixture imports compact.
 import { createPercentCommentFixture, createPlanningFixture } from './structural-planning-performance-fixtures.ts';
@@ -46,6 +47,10 @@ interface FixtureOffsets {
   readonly blockquote: number;
   readonly callout: number;
   readonly fencedCode: number;
+  readonly firstChild: number;
+  readonly nextSibling: number;
+  readonly parent: number;
+  readonly previousSibling: number;
   readonly target: number;
 }
 
@@ -59,7 +64,7 @@ const PERCENT_BLOCK_COUNT = 2000;
 const PERCENT_SCALE_FACTOR = 2;
 const SAMPLE_COUNT = 9;
 const SECTION_CLIPBOARD_CHECK_COUNT = 2;
-const SHARED_CHECK_COUNT = 13;
+const SHARED_CHECK_COUNT = 17;
 const SMALL_PLANNING_KIBIBYTES = 250;
 const SMALL_PLANNING_BYTES = SMALL_PLANNING_KIBIBYTES * KIBIBYTE;
 const WARM_UP_ROUNDS = 3;
@@ -108,6 +113,10 @@ function getFixtureOffsets(source: string): FixtureOffsets {
     blockquote: source.indexOf('blockquote cursor'),
     callout: source.indexOf('callout cursor'),
     fencedCode: source.indexOf('fenced cursor'),
+    firstChild: source.indexOf('Nested target child'),
+    nextSibling: source.indexOf('Flat omega'),
+    parent: source.indexOf('Planning fixture'),
+    previousSibling: source.indexOf('Flat alpha'),
     target: source.indexOf('planning target body')
   };
 }
@@ -210,6 +219,23 @@ function runContextSharedChecks(input: BenchmarkInput): number {
   const offsets = requireFixtureOffsets(input);
   let successfulResults = 0;
 
+  for (
+    const [mode, cursorOffset] of [
+      ['parent', offsets.parent],
+      ['previous-sibling', offsets.previousSibling],
+      ['next-sibling', offsets.nextSibling],
+      ['first-child', offsets.firstChild]
+    ] as const
+  ) {
+    const plan = planSectionNavigationWithContext(
+      context,
+      offsets.target,
+      mode
+    );
+    if (plan?.cursorOffset === cursorOffset) {
+      successfulResults += 1;
+    }
+  }
   for (const mode of ['up', 'down', 'start', 'end'] as const) {
     if (
       planSectionMovementWithContext(context, offsets.target, {
@@ -332,7 +358,7 @@ const benchmarkCases: readonly BenchmarkCase[] = [
   },
   {
     large: largePlanningInput,
-    name: 'One context-shared 13-check batch',
+    name: 'One context-shared 17-check batch',
     run: runContextSharedChecks,
     small: smallPlanningInput,
     validateResult: validateCountResult
