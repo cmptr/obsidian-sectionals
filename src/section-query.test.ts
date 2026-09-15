@@ -458,6 +458,27 @@ describe('section queries', () => {
     expect(findNextSiblingSection(sections, child)).toBeNull();
   });
 
+  it('does not cross root containers from separate parses', () => {
+    const firstSections = collectMarkdownSections(parseMarkdownStructure('# First\n'));
+    const secondSections = collectMarkdownSections(parseMarkdownStructure('# Second\n'));
+    const first = firstSections[0];
+    const second = secondSections[0];
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    if (first === undefined || second === undefined) {
+      throw new Error('expected separate parse fixture headings');
+    }
+
+    expect(first.heading.container.id).toBe(second.heading.container.id);
+    expect(first.heading.container).not.toBe(second.heading.container);
+
+    const combinedSections = [...firstSections, ...secondSections];
+    expect(findSiblingSections(combinedSections, first)).toEqual([first]);
+    expect(findNextSiblingSection(combinedSections, first)).toBeNull();
+    expect(findPreviousSiblingSection(combinedSections, second)).toBeNull();
+  });
+
   it('requires canonical section and parent heading identities', () => {
     const source = '# Root\n## Child\n## Next\n';
     const sections = collectMarkdownSections(parseMarkdownStructure(source));

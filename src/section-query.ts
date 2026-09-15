@@ -125,7 +125,7 @@ export function findSiblingSections(
   target: MarkdownSection
 ): readonly MarkdownSection[] {
   return sections.filter((section) =>
-    section.heading.container.id === target.heading.container.id
+    section.heading.container === target.heading.container
     && section.heading.level === target.heading.level
     && section.parent === target.parent
   );
