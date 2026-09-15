@@ -68,7 +68,7 @@ Before a release, complete this manual mobile smoke test. CI does not run it.
 3. Invoke one deletion, one movement, one hierarchy change, linked extraction, and open extraction.
 4. Run Copy and Cut on root, quoted, and callout sections.
 5. Run **Go to parent section**, **Go to previous sibling section**, **Go to next sibling section**, and **Go to first child section**.
-6. Verify navigation starts from the deepest section at the selection head, collapses the selection, and lands in the destination heading title.
+6. Verify navigation starts from the deepest section at the selection head, collapses the selection, and lands at the destination title start or after the opening markers of an untitled ATX heading.
 7. Verify navigation placement for ATX and Setext headings in root notes, quoted sections, callouts, and CRLF notes.
 8. Verify each navigation command is unavailable at its corresponding parent, sibling, or child boundary.
 9. Verify navigation changes neither note content nor Undo history and does not change the action remembered by **Repeat last structural action**.
