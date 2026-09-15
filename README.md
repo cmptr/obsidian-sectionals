@@ -71,7 +71,7 @@ Movement carries the complete section, including its nested subsections. The cur
 | **Go to next sibling section**     | Moves the cursor to the next sibling's heading.     |
 | **Go to first child section**      | Moves the cursor to the first child's heading.      |
 
-Navigation starts from the deepest section at the head of the active selection. It collapses the selection and does not cross between the note body, blockquotes, or callouts. The cursor lands at the start of the destination heading's title, or after its opening markers when the heading is untitled. Navigation does not change note content or add anything to Undo, and it does not replace the action remembered by **Repeat last structural action**.
+Navigation starts from the deepest section at the head of the active selection. It collapses the selection and does not cross between the note body, blockquotes, or callouts. The cursor lands at the start of the destination heading's title, or after its opening markers when the heading is untitled, and the editor centers that destination in view. Navigation does not change note content or add anything to Undo, and it does not replace the action remembered by **Repeat last structural action**.
 
 ### Hierarchy
 

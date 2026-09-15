@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add **Go to parent section**, **Go to previous sibling section**, **Go to next sibling section**, and **Go to first child section**.
+- Add **Go to parent section**, **Go to previous sibling section**, **Go to next sibling section**, and **Go to first child section**, with centered destination scrolling.
 
 ## 0.4.0
 

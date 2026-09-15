@@ -84,6 +84,7 @@ interface ExtractionOrigin {
   readonly leaf: WorkspaceLeaf;
   readonly view: MarkdownView;
 }
+type NavigationEditor = Pick<Editor, 'scrollIntoView'> & SectionEditor;
 type NavigationPlanner = (
   source: string,
   cursorOffset: number,
@@ -957,7 +958,7 @@ async function runExtractionCommand(
 
 export function checkAndExecuteSectionNavigation(
   isChecking: boolean,
-  editor: SectionEditor,
+  editor: NavigationEditor,
   mode: SectionNavigationMode,
   planner: NavigationPlanner = planSectionNavigation
 ): boolean {
@@ -971,6 +972,14 @@ export function checkAndExecuteSectionNavigation(
     if (!isChecking) {
       const destination = editor.offsetToPos(plan.cursorOffset);
       editor.setCursor(destination);
+      try {
+        editor.scrollIntoView(
+          { from: destination, to: destination },
+          true
+        );
+      } catch {
+        // Cursor navigation succeeded; viewport centering is best-effort.
+      }
     }
     return true;
   } catch {

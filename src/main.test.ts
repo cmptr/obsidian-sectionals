@@ -72,8 +72,9 @@ interface EditorFailureCase {
 }
 
 interface EditorFixture {
-  editor: SectionEditor;
+  editor: NavigationEditor;
   replaceRange: ReturnType<typeof vi.fn>;
+  scrollIntoView: ReturnType<typeof vi.fn>;
   setCursor: ReturnType<typeof vi.fn>;
 }
 
@@ -114,6 +115,7 @@ interface TestSectionClipboardDependencies {
   writeText(text: string): Promise<void>;
 }
 
+type NavigationEditor = Pick<Editor, 'scrollIntoView'> & SectionEditor;
 type SectionEditor = Pick<
   Editor,
   | 'getCursor'
@@ -142,6 +144,7 @@ function createEditor(source: string, cursorOffset: number): EditorFixture {
         + currentSource.slice(end);
     }
   );
+  const scrollIntoView = vi.fn();
   const setCursor = vi.fn();
   return {
     editor: {
@@ -150,9 +153,11 @@ function createEditor(source: string, cursorOffset: number): EditorFixture {
       offsetToPos: vi.fn(position),
       posToOffset: vi.fn(toOffset),
       replaceRange,
+      scrollIntoView,
       setCursor
     },
     replaceRange,
+    scrollIntoView,
     setCursor
   };
 }
@@ -170,6 +175,7 @@ function createSelectionEditor(
   let anchor = position(anchorOffset);
   let head = position(headOffset);
   const replaceRange = vi.fn();
+  const scrollIntoView = vi.fn();
   const setCursor = vi.fn((destination: EditorPosition) => {
     anchor = destination;
     head = destination;
@@ -177,7 +183,7 @@ function createSelectionEditor(
       throw cursorFailure;
     }
   });
-  const editor: SectionEditor = {
+  const editor: NavigationEditor = {
     getCursor: vi.fn((which?: 'anchor' | 'from' | 'head' | 'to') =>
       which === 'anchor' || which === 'from' ? anchor : head
     ),
@@ -185,12 +191,14 @@ function createSelectionEditor(
     offsetToPos: vi.fn(position),
     posToOffset: vi.fn(({ ch }: EditorPosition) => ch),
     replaceRange,
+    scrollIntoView,
     setCursor
   };
   return {
     editor,
     getSelection: () => ({ anchor, head }),
     replaceRange,
+    scrollIntoView,
     setCursor
   };
 }
@@ -681,8 +689,8 @@ describe('checkAndExecuteSectionNavigation', () => {
   const mode = 'next-sibling' as const;
   const plan = { cursorOffset: 14 };
 
-  it('checks from the selection head without moving or editing', () => {
-    const { editor, replaceRange, setCursor } = createEditor(
+  it('checks from the selection head without moving, scrolling, or editing', () => {
+    const { editor, replaceRange, scrollIntoView, setCursor } = createEditor(
       '## One\none\n## Two\ntwo\n',
       4
     );
@@ -699,11 +707,12 @@ describe('checkAndExecuteSectionNavigation', () => {
     );
     expect(editor.offsetToPos).not.toHaveBeenCalled();
     expect(replaceRange).not.toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalled();
     expect(setCursor).not.toHaveBeenCalled();
   });
 
-  it('executes with exactly one destination mapping and one collapsed cursor placement', () => {
-    const { editor, replaceRange, setCursor } = createEditor(
+  it('executes with one cursor placement and centers the destination', () => {
+    const { editor, replaceRange, scrollIntoView, setCursor } = createEditor(
       '## One\none\n## Two\ntwo\n',
       4
     );
@@ -712,11 +721,19 @@ describe('checkAndExecuteSectionNavigation', () => {
       checkAndExecuteSectionNavigation(false, editor, mode, () => plan)
     ).toBe(true);
     expect(editor.offsetToPos).toHaveBeenCalledExactlyOnceWith(14);
-    expect(setCursor).toHaveBeenCalledExactlyOnceWith({ ch: 14, line: 0 });
+    const destination = { ch: 14, line: 0 };
+    expect(setCursor).toHaveBeenCalledExactlyOnceWith(destination);
+    expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith(
+      { from: destination, to: destination },
+      true
+    );
+    expect(setCursor.mock.invocationCallOrder[0]).toBeLessThan(
+      scrollIntoView.mock.invocationCallOrder[0] ?? 0
+    );
     expect(replaceRange).not.toHaveBeenCalled();
   });
 
-  it('resolves a non-empty selection from its head and collapses it at the destination', () => {
+  it('resolves a non-empty selection from its head and collapses it at the centered destination', () => {
     const fixture = createSelectionEditor(
       '## One\none\n## Two\ntwo\n',
       1,
@@ -736,18 +753,46 @@ describe('checkAndExecuteSectionNavigation', () => {
       anchor: { ch: 14, line: 0 },
       head: { ch: 14, line: 0 }
     });
+    expect(fixture.scrollIntoView).toHaveBeenCalledExactlyOnceWith(
+      {
+        from: { ch: 14, line: 0 },
+        to: { ch: 14, line: 0 }
+      },
+      true
+    );
     expect(fixture.replaceRange).not.toHaveBeenCalled();
   });
 
-  it('returns false without moving for unavailable navigation', () => {
-    const { editor, replaceRange, setCursor } = createEditor('# Root\n', 2);
+  it('returns false without moving or scrolling for unavailable navigation', () => {
+    const { editor, replaceRange, scrollIntoView, setCursor } = createEditor(
+      '# Root\n',
+      2
+    );
 
     expect(
       checkAndExecuteSectionNavigation(false, editor, mode, () => null)
     ).toBe(false);
     expect(editor.offsetToPos).not.toHaveBeenCalled();
     expect(replaceRange).not.toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalled();
     expect(setCursor).not.toHaveBeenCalled();
+  });
+
+  it('keeps successful navigation when centered scrolling fails', () => {
+    const { editor, replaceRange, scrollIntoView, setCursor } = createEditor(
+      '## One\none\n## Two\ntwo\n',
+      4
+    );
+    scrollIntoView.mockImplementationOnce(() => {
+      throw new Error('scroll failed');
+    });
+
+    expect(
+      checkAndExecuteSectionNavigation(false, editor, mode, () => plan)
+    ).toBe(true);
+    expect(setCursor).toHaveBeenCalledExactlyOnceWith({ ch: 14, line: 0 });
+    expect(scrollIntoView).toHaveBeenCalledOnce();
+    expect(replaceRange).not.toHaveBeenCalled();
   });
 
   it.each(
@@ -760,7 +805,7 @@ describe('checkAndExecuteSectionNavigation', () => {
       'setCursor'
     ] as const
   )('fails closed when %s throws', (failurePoint) => {
-    const { editor, replaceRange, setCursor } = createEditor(
+    const { editor, replaceRange, scrollIntoView, setCursor } = createEditor(
       '## One\none\n## Two\ntwo\n',
       4
     );
@@ -780,6 +825,7 @@ describe('checkAndExecuteSectionNavigation', () => {
       checkAndExecuteSectionNavigation(false, editor, mode, planner)
     ).toBe(false);
     expect(replaceRange).not.toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalled();
     if (failurePoint === 'setCursor') {
       expect(editor.offsetToPos).toHaveBeenCalledOnce();
       expect(setCursor).toHaveBeenCalledOnce();
@@ -1590,10 +1636,20 @@ describe('SectionalsPlugin', () => {
       expect(fixture.editor.offsetToPos).toHaveBeenCalledExactlyOnceWith(
         source.indexOf(destination)
       );
-      expect(fixture.setCursor).toHaveBeenCalledExactlyOnceWith({
+      const destinationPosition = {
         ch: source.indexOf(destination),
         line: 0
-      });
+      };
+      expect(fixture.setCursor).toHaveBeenCalledExactlyOnceWith(
+        destinationPosition
+      );
+      expect(fixture.scrollIntoView).toHaveBeenCalledExactlyOnceWith(
+        { from: destinationPosition, to: destinationPosition },
+        true
+      );
+      expect(fixture.setCursor.mock.invocationCallOrder[0]).toBeLessThan(
+        fixture.scrollIntoView.mock.invocationCallOrder[0] ?? 0
+      );
       expect(fixture.replaceRange).not.toHaveBeenCalled();
     }
   );
