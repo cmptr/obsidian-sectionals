@@ -77,6 +77,15 @@ interface EditorFixture {
   setCursor: ReturnType<typeof vi.fn>;
 }
 
+interface SelectionState {
+  readonly anchor: EditorPosition;
+  readonly head: EditorPosition;
+}
+
+interface SelectionEditorFixture extends EditorFixture {
+  getSelection(): SelectionState;
+}
+
 interface PluginCommandsFixture {
   addCommand: MockInstance<(command: Command) => Command>;
 }
@@ -143,6 +152,44 @@ function createEditor(source: string, cursorOffset: number): EditorFixture {
       replaceRange,
       setCursor
     },
+    replaceRange,
+    setCursor
+  };
+}
+
+function createSelectionEditor(
+  source: string,
+  anchorOffset: number,
+  headOffset: number,
+  cursorFailure?: Error
+): SelectionEditorFixture {
+  function position(offset: number): EditorPosition {
+    return { ch: offset, line: 0 };
+  }
+
+  let anchor = position(anchorOffset);
+  let head = position(headOffset);
+  const replaceRange = vi.fn();
+  const setCursor = vi.fn((destination: EditorPosition) => {
+    anchor = destination;
+    head = destination;
+    if (cursorFailure !== undefined) {
+      throw cursorFailure;
+    }
+  });
+  const editor: SectionEditor = {
+    getCursor: vi.fn((which?: 'anchor' | 'from' | 'head' | 'to') =>
+      which === 'anchor' || which === 'from' ? anchor : head
+    ),
+    getValue: vi.fn(() => source),
+    offsetToPos: vi.fn(position),
+    posToOffset: vi.fn(({ ch }: EditorPosition) => ch),
+    replaceRange,
+    setCursor
+  };
+  return {
+    editor,
+    getSelection: () => ({ anchor, head }),
     replaceRange,
     setCursor
   };
@@ -667,6 +714,29 @@ describe('checkAndExecuteSectionNavigation', () => {
     expect(editor.offsetToPos).toHaveBeenCalledExactlyOnceWith(14);
     expect(setCursor).toHaveBeenCalledExactlyOnceWith({ ch: 14, line: 0 });
     expect(replaceRange).not.toHaveBeenCalled();
+  });
+
+  it('resolves a non-empty selection from its head and collapses it at the destination', () => {
+    const fixture = createSelectionEditor(
+      '## One\none\n## Two\ntwo\n',
+      1,
+      4
+    );
+    const planner = vi.fn(() => plan);
+
+    expect(
+      checkAndExecuteSectionNavigation(false, fixture.editor, mode, planner)
+    ).toBe(true);
+    expect(planner).toHaveBeenCalledExactlyOnceWith(
+      '## One\none\n## Two\ntwo\n',
+      4,
+      mode
+    );
+    expect(fixture.getSelection()).toEqual({
+      anchor: { ch: 14, line: 0 },
+      head: { ch: 14, line: 0 }
+    });
+    expect(fixture.replaceRange).not.toHaveBeenCalled();
   });
 
   it('returns false without moving for unavailable navigation', () => {
@@ -1437,47 +1507,96 @@ describe('SectionalsPlugin', () => {
         commandId: 'go-to-parent-section',
         cursor: 'child',
         destination: 'Parent',
+        name: 'ATX parent navigation',
         source: '# Parent\nparent\n### Child\nchild\n'
       },
       {
         commandId: 'go-to-previous-sibling-section',
         cursor: 'two',
         destination: 'One',
+        name: 'ATX previous-sibling navigation',
         source: '## One\none\n## Two\ntwo\n'
       },
       {
         commandId: 'go-to-next-sibling-section',
         cursor: 'one',
         destination: 'Two',
+        name: 'ATX next-sibling navigation',
         source: '## One\none\n## Two\ntwo\n'
       },
       {
         commandId: 'go-to-first-child-section',
         cursor: 'parent',
         destination: 'Child',
+        name: 'ATX first-child navigation',
         source: '# Parent\nparent\n### Child\nchild\n'
+      },
+      {
+        commandId: 'go-to-next-sibling-section',
+        cursor: 'one',
+        destination: 'Two',
+        name: 'Setext sibling navigation',
+        source: 'One\n===\n\none\n\nTwo\n===\n\ntwo\n'
+      },
+      {
+        commandId: 'go-to-parent-section',
+        cursor: 'child',
+        destination: 'Parent',
+        name: 'blockquote parent navigation',
+        source: '> # Parent\n> p\n> ### Child\n> child\n'
+      },
+      {
+        commandId: 'go-to-previous-sibling-section',
+        cursor: 'two',
+        destination: 'One',
+        name: 'nested blockquote sibling navigation',
+        source: '>> ## One\n>> one\n>> ## Two\n>> two\n'
+      },
+      {
+        commandId: 'go-to-first-child-section',
+        cursor: 'parent',
+        destination: 'Child',
+        name: 'callout child navigation',
+        source: '> [!note]\n> ## Parent\n> parent\n> ### Child\n> child\n'
+      },
+      {
+        commandId: 'go-to-next-sibling-section',
+        cursor: 'one',
+        destination: 'Two',
+        name: 'CRLF sibling navigation',
+        source: '# Root\r\n## One\r\none\r\n## Two\r\ntwo\r\n'
+      },
+      {
+        commandId: 'go-to-next-sibling-section',
+        cursor: 'one',
+        destination: 'Two',
+        name: 'true-EOF sibling navigation',
+        source: '## One\none\n## Two'
       }
     ] as const
-  )('executes $commandId at the exact title position', ({ commandId, cursor, destination, source }) => {
-    const fixture = createEditor(source, source.lastIndexOf(cursor));
-    const commands = getRegisteredCommands(loadPluginCommands());
+  )(
+    'executes $name through its registered callback at the exact title position',
+    ({ commandId, cursor, destination, source }) => {
+      const fixture = createEditor(source, source.lastIndexOf(cursor));
+      const commands = getRegisteredCommands(loadPluginCommands());
 
-    expect(
-      commands.get(commandId)?.editorCheckCallback?.(
-        false,
-        fixture.editor as Editor,
-        {} as PublicMarkdownView
-      )
-    ).toBe(true);
-    expect(fixture.editor.offsetToPos).toHaveBeenCalledExactlyOnceWith(
-      source.indexOf(destination)
-    );
-    expect(fixture.setCursor).toHaveBeenCalledExactlyOnceWith({
-      ch: source.indexOf(destination),
-      line: 0
-    });
-    expect(fixture.replaceRange).not.toHaveBeenCalled();
-  });
+      expect(
+        commands.get(commandId)?.editorCheckCallback?.(
+          false,
+          fixture.editor as Editor,
+          {} as PublicMarkdownView
+        )
+      ).toBe(true);
+      expect(fixture.editor.offsetToPos).toHaveBeenCalledExactlyOnceWith(
+        source.indexOf(destination)
+      );
+      expect(fixture.setCursor).toHaveBeenCalledExactlyOnceWith({
+        ch: source.indexOf(destination),
+        line: 0
+      });
+      expect(fixture.replaceRange).not.toHaveBeenCalled();
+    }
+  );
 
   it('replans navigation from fresh source after a check', () => {
     const checkedSource = '## One\none\n## Two\ntwo\n';
@@ -1573,6 +1692,125 @@ describe('SectionalsPlugin', () => {
       expect(navigation.replaceRange).not.toHaveBeenCalled();
     }
   );
+
+  it.each(['unavailable', 'throwing'] as const)(
+    'preserves the remembered movement after %s navigation',
+    (failureKind) => {
+      const commands = getRegisteredCommands(loadPluginCommands());
+      const movementSource = '## One\none\n## Two\ntwo\n';
+      const seed = createEditor(
+        movementSource,
+        movementSource.indexOf('one')
+      );
+      expect(
+        commands.get('move-current-section-down')?.editorCheckCallback?.(
+          false,
+          seed.editor as Editor,
+          {} as PublicMarkdownView
+        )
+      ).toBe(true);
+
+      const navigationSource = failureKind === 'unavailable'
+        ? '# Root\nroot\n'
+        : '## One\none\n## Two\ntwo\n';
+      const navigation = createEditor(
+        navigationSource,
+        navigationSource.indexOf(failureKind === 'unavailable' ? 'root' : 'one')
+      );
+      if (failureKind === 'throwing') {
+        vi.mocked(navigation.editor.getValue).mockImplementationOnce(() => {
+          throw new Error('navigation read failed');
+        });
+      }
+      expect(
+        commands.get(
+          failureKind === 'unavailable'
+            ? 'go-to-parent-section'
+            : 'go-to-next-sibling-section'
+        )?.editorCheckCallback?.(
+          false,
+          navigation.editor as Editor,
+          {} as PublicMarkdownView
+        )
+      ).toBe(false);
+      expect(navigation.editor.getValue()).toBe(navigationSource);
+      expect(navigation.replaceRange).not.toHaveBeenCalled();
+      expect(navigation.setCursor).not.toHaveBeenCalled();
+
+      const repeat = createEditor(
+        movementSource,
+        movementSource.indexOf('one')
+      );
+      expect(
+        commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+          false,
+          repeat.editor as Editor,
+          {} as PublicMarkdownView
+        )
+      ).toBe(true);
+      expect(repeat.editor.getValue()).toBe(
+        '## Two\ntwo\n## One\none\n'
+      );
+    }
+  );
+
+  it('keeps Repeat and source state when cursor placement applies then throws', () => {
+    const commands = getRegisteredCommands(loadPluginCommands());
+    const movementSource = '## One\none\n## Two\ntwo\n';
+    const seed = createEditor(
+      movementSource,
+      movementSource.indexOf('one')
+    );
+    expect(
+      commands.get('move-current-section-down')?.editorCheckCallback?.(
+        false,
+        seed.editor as Editor,
+        {} as PublicMarkdownView
+      )
+    ).toBe(true);
+
+    const navigationSource = '# Parent\nparent\n## Child\nchild\n';
+    const destinationOffset = navigationSource.indexOf('Parent');
+    const cursorFailure = new Error('cursor placement failed');
+    const navigation = createSelectionEditor(
+      navigationSource,
+      navigationSource.indexOf('parent'),
+      navigationSource.indexOf('child'),
+      cursorFailure
+    );
+    expect(
+      commands.get('go-to-parent-section')?.editorCheckCallback?.(
+        false,
+        navigation.editor as Editor,
+        {} as PublicMarkdownView
+      )
+    ).toBe(false);
+    expect(navigation.setCursor).toHaveBeenCalledExactlyOnceWith({
+      ch: destinationOffset,
+      line: 0
+    });
+    expect(navigation.editor.getValue()).toBe(navigationSource);
+    expect(navigation.replaceRange).not.toHaveBeenCalled();
+    expect(navigation.getSelection()).toEqual({
+      anchor: { ch: destinationOffset, line: 0 },
+      head: { ch: destinationOffset, line: 0 }
+    });
+
+    const repeat = createEditor(
+      movementSource,
+      movementSource.indexOf('one')
+    );
+    expect(
+      commands.get('repeat-last-structural-action')?.editorCheckCallback?.(
+        false,
+        repeat.editor as Editor,
+        {} as PublicMarkdownView
+      )
+    ).toBe(true);
+    expect(repeat.editor.getValue()).toBe(
+      '## Two\ntwo\n## One\none\n'
+    );
+  });
 
   it('formats every clipboard result as its exact user-facing notice', () => {
     expect(
