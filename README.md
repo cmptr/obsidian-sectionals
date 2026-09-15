@@ -2,7 +2,7 @@
 
 Edit Markdown by structure, not selection.
 
-Sectionals gives Obsidian 17 commands for acting on complete parts of a note. Delete a callout, copy a section, move a section, extract a section into another note, or repeat a movement without selecting the exact lines first.
+Sectionals gives Obsidian 21 commands for acting on complete parts of a note. Delete a callout, copy a section, move a section, extract a section into another note, or repeat a movement without selecting the exact lines first.
 
 ## Installation
 
@@ -61,6 +61,17 @@ Quoted and callout sections use the same scope as **Delete current section**. If
 | **Repeat last structural action** | Runs the last successful movement or hierarchy change again. |
 
 Movement carries the complete section, including its nested subsections. The cursor follows the moved text.
+
+### Navigate
+
+| Command                            | Result                                              |
+| ---------------------------------- | --------------------------------------------------- |
+| **Go to parent section**           | Moves the cursor to the parent section's heading.   |
+| **Go to previous sibling section** | Moves the cursor to the previous sibling's heading. |
+| **Go to next sibling section**     | Moves the cursor to the next sibling's heading.     |
+| **Go to first child section**      | Moves the cursor to the first child's heading.      |
+
+Navigation starts from the deepest section at the head of the active selection. It collapses the selection, stays in the same Markdown container, and lands in the destination heading title. It does not change note content or add anything to Undo, and it does not replace the action remembered by **Repeat last structural action**.
 
 ### Hierarchy
 

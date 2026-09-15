@@ -67,12 +67,17 @@ Before a release, complete this manual mobile smoke test. CI does not run it.
 2. Load and enable Sectionals on current Android or iOS Obsidian.
 3. Invoke one deletion, one movement, one hierarchy change, linked extraction, and open extraction.
 4. Run Copy and Cut on root, quoted, and callout sections.
-5. Verify clipboard permission success and denial, and one-step editor Undo after Cut.
-6. Verify exact clipboard text for Setext headings and CRLF notes.
-7. Where reproducible, change the source note while clipboard access is pending and verify that Cut cancels deletion.
-8. Restart the plugin and verify that it retains no clipboard state.
-9. Verify command availability, destination retention rules, and no startup console error.
-10. Record the platform, OS, and Obsidian versions in the release review.
+5. Run **Go to parent section**, **Go to previous sibling section**, **Go to next sibling section**, and **Go to first child section**.
+6. Verify navigation starts from the deepest section at the selection head, collapses the selection, and lands in the destination heading title.
+7. Verify navigation placement for ATX and Setext headings in root notes, quoted sections, callouts, and CRLF notes.
+8. Verify each navigation command is unavailable at its corresponding parent, sibling, or child boundary.
+9. Verify navigation changes neither note content nor Undo history and does not change the action remembered by **Repeat last structural action**.
+10. Verify clipboard permission success and denial, and one-step editor Undo after Cut.
+11. Verify exact clipboard text for Setext headings and CRLF notes.
+12. Where reproducible, change the source note while clipboard access is pending and verify that Cut cancels deletion.
+13. Restart the plugin and verify that it retains no clipboard state.
+14. Verify command availability, destination retention rules, and no startup console error.
+15. Record the platform, OS, and Obsidian versions in the release review.
 
 ## Open a pull request
 

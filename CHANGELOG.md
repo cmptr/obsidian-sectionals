@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add **Go to parent section**, **Go to previous sibling section**, **Go to next sibling section**, and **Go to first child section**.
+
 ## 0.4.0
 
 - Add commands to copy or cut the current section, with clipboard completion required before Cut removes source text.
