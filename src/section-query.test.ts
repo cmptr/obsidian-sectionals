@@ -6,8 +6,11 @@ import type { MarkdownSection } from './section-query.ts';
 import { parseMarkdownStructure } from './markdown-structure.ts';
 import {
   collectMarkdownSections,
+  findFirstChildSection,
   findHeadingsInSection,
   findMarkdownSection,
+  findNextSiblingSection,
+  findParentSection,
   findPreviousSiblingSection,
   findSiblingSections
 } from './section-query.ts';
@@ -315,5 +318,170 @@ describe('section queries', () => {
     for (const cursor of [-1, source.length + 1, 0.5, NaN]) {
       expect(findMarkdownSection(source.length, sections, cursor)).toBeNull();
     }
+  });
+
+  it('finds canonical root and nested relationships across skipped levels', () => {
+    const source = [
+      '# Root',
+      '### Skipped child',
+      '#### First grandchild',
+      '#### Second grandchild',
+      '### Other child',
+      '#### Other grandchild',
+      '# Next root',
+      ''
+    ].join('\n');
+    const sections = collectMarkdownSections(parseMarkdownStructure(source));
+
+    function byHeading(heading: string): MarkdownSection | undefined {
+      return sections.find((section) => section.heading.lineStart === source.indexOf(heading));
+    }
+
+    const root = byHeading('# Root');
+    const skippedChild = byHeading('### Skipped child');
+    const firstGrandchild = byHeading('#### First grandchild');
+    const secondGrandchild = byHeading('#### Second grandchild');
+    const otherChild = byHeading('### Other child');
+    const otherGrandchild = byHeading('#### Other grandchild');
+    const nextRoot = byHeading('# Next root');
+
+    expect(root).toBeDefined();
+    expect(skippedChild).toBeDefined();
+    expect(firstGrandchild).toBeDefined();
+    expect(secondGrandchild).toBeDefined();
+    expect(otherChild).toBeDefined();
+    expect(otherGrandchild).toBeDefined();
+    expect(nextRoot).toBeDefined();
+    if (
+      root === undefined
+      || skippedChild === undefined
+      || firstGrandchild === undefined
+      || secondGrandchild === undefined
+      || otherChild === undefined
+      || otherGrandchild === undefined
+      || nextRoot === undefined
+    ) {
+      throw new Error('expected relationship fixture headings');
+    }
+
+    expect(findParentSection(sections, root)).toBeNull();
+    expect(findParentSection(sections, skippedChild)).toBe(root);
+    expect(findParentSection(sections, firstGrandchild)).toBe(skippedChild);
+    expect(findNextSiblingSection(sections, root)).toBe(nextRoot);
+    expect(findNextSiblingSection(sections, firstGrandchild)).toBe(secondGrandchild);
+    expect(findNextSiblingSection(sections, secondGrandchild)).toBeNull();
+    expect(findNextSiblingSection(sections, skippedChild)).toBe(otherChild);
+    expect(findNextSiblingSection(sections, otherGrandchild)).toBeNull();
+    expect(findFirstChildSection(sections, root)).toBe(skippedChild);
+    expect(findFirstChildSection(sections, skippedChild)).toBe(firstGrandchild);
+    expect(findFirstChildSection(sections, firstGrandchild)).toBeNull();
+  });
+
+  it.each([
+    {
+      childHeading: '> > #### Child',
+      firstHeading: '> > ## First',
+      name: 'a nested blockquote',
+      secondHeading: '> > ## Second',
+      source: [
+        '> Outer',
+        '> > ## First',
+        '> > #### Child',
+        '> > body',
+        '> > ## Second',
+        ''
+      ].join('\n')
+    },
+    {
+      childHeading: '> #### Child',
+      firstHeading: '> ## First',
+      name: 'a callout',
+      secondHeading: '> ## Second',
+      source: [
+        '> [!note] Container',
+        '> ## First',
+        '> #### Child',
+        '> body',
+        '> ## Second',
+        ''
+      ].join('\n')
+    }
+  ])('finds canonical relationships inside $name', ({
+    childHeading,
+    firstHeading,
+    secondHeading,
+    source
+  }) => {
+    const sections = collectMarkdownSections(parseMarkdownStructure(source));
+    const first = sections.find((section) => section.heading.lineStart === source.indexOf(firstHeading));
+    const child = sections.find((section) => section.heading.lineStart === source.indexOf(childHeading));
+    const second = sections.find((section) => section.heading.lineStart === source.indexOf(secondHeading));
+
+    expect(first).toBeDefined();
+    expect(child).toBeDefined();
+    expect(second).toBeDefined();
+    if (first === undefined || child === undefined || second === undefined) {
+      throw new Error('expected container relationship fixture headings');
+    }
+
+    expect(findParentSection(sections, child)).toBe(first);
+    expect(findFirstChildSection(sections, first)).toBe(child);
+    expect(findNextSiblingSection(sections, first)).toBe(second);
+  });
+
+  it('does not cross separate blockquote containers', () => {
+    const source = [
+      '> ## First',
+      '> ### Child',
+      '> body',
+      '',
+      'outside',
+      '',
+      '> ## Second',
+      '> ### Other child',
+      '> body',
+      ''
+    ].join('\n');
+    const sections = collectMarkdownSections(parseMarkdownStructure(source));
+    const first = sections.find((section) => section.heading.lineStart === source.indexOf('> ## First'));
+    const child = sections.find((section) => section.heading.lineStart === source.indexOf('> ### Child'));
+
+    expect(first).toBeDefined();
+    expect(child).toBeDefined();
+    if (first === undefined || child === undefined) {
+      throw new Error('expected separate blockquote fixture headings');
+    }
+
+    expect(findParentSection(sections, child)).toBe(first);
+    expect(findFirstChildSection(sections, first)).toBe(child);
+    expect(findNextSiblingSection(sections, first)).toBeNull();
+    expect(findNextSiblingSection(sections, child)).toBeNull();
+  });
+
+  it('requires canonical section and parent heading identities', () => {
+    const source = '# Root\n## Child\n## Next\n';
+    const sections = collectMarkdownSections(parseMarkdownStructure(source));
+    const root = sections[0];
+    const child = sections[1];
+    const next = sections[2];
+
+    expect(root).toBeDefined();
+    expect(child).toBeDefined();
+    expect(next).toBeDefined();
+    if (root === undefined || child === undefined || next === undefined) {
+      throw new Error('expected identity fixture headings');
+    }
+
+    const clonedChild: MarkdownSection = { ...child };
+    expect(findParentSection(sections, clonedChild)).toBeNull();
+    expect(findNextSiblingSection(sections, clonedChild)).toBeNull();
+    expect(findFirstChildSection(sections, { ...root })).toBeNull();
+
+    const clonedParentHeading: MarkdownSection = {
+      ...child,
+      parent: { ...root.heading }
+    };
+    const sectionsWithExactTarget = [root, clonedParentHeading, next];
+    expect(findParentSection(sectionsWithExactTarget, clonedParentHeading)).toBeNull();
   });
 });

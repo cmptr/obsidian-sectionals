@@ -36,6 +36,19 @@ export function collectMarkdownSections(
   });
 }
 
+export function findFirstChildSection(
+  sections: readonly MarkdownSection[],
+  target: MarkdownSection
+): MarkdownSection | null {
+  if (!sections.includes(target)) {
+    return null;
+  }
+  return sections.find((section) =>
+    section.parent === target.heading
+    && section.heading.container === target.heading.container
+  ) ?? null;
+}
+
 export function findHeadingsInSection(
   structure: MarkdownStructure,
   section: MarkdownSection
@@ -77,6 +90,25 @@ export function findMarkdownSection(
     }
   }
   return target;
+}
+
+export function findNextSiblingSection(
+  sections: readonly MarkdownSection[],
+  target: MarkdownSection
+): MarkdownSection | null {
+  const siblings = findSiblingSections(sections, target);
+  const index = siblings.indexOf(target);
+  return index === -1 ? null : siblings[index + 1] ?? null;
+}
+
+export function findParentSection(
+  sections: readonly MarkdownSection[],
+  target: MarkdownSection
+): MarkdownSection | null {
+  if (!sections.includes(target) || target.parent === null) {
+    return null;
+  }
+  return sections.find((section) => section.heading === target.parent) ?? null;
 }
 
 export function findPreviousSiblingSection(
