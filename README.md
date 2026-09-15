@@ -1,8 +1,6 @@
 # Sectionals
 
-Edit Markdown by structure, not selection.
-
-Sectionals gives Obsidian 21 commands for acting on complete parts of a note. Delete a callout, copy a section, move a section, extract a section into another note, or repeat a movement without selecting the exact lines first.
+Sectionals is a set of commands for acting on individual sections of a note in Markdown. Delete a callout, copy or move a section, jump to a related section, change heading levels, or move a section into another note without selecting exact lines first.
 
 ## Installation
 
@@ -10,57 +8,54 @@ Sectionals gives Obsidian 21 commands for acting on complete parts of a note. De
 2. Select **Browse**, search for **Sectionals**, and install it.
 3. Enable Sectionals from the installed plugins list.
 
-For a manual installation, download `main.js` and `manifest.json` from the latest GitHub release. Copy both files into `<vault>/.obsidian/plugins/sectionals/`, then reload Obsidian and enable Sectionals under **Community plugins**.
+For a manual installation, download `main.js` and `manifest.json` from the latest GitHub release. Copy both files into the `.obsidian/plugins/sectionals/` folder inside your vault, which is the folder containing your Obsidian notes. Then reload Obsidian and enable Sectionals under **Community plugins**.
 
-## How it works
+## How sections work
 
-Sectionals treats Markdown structures as complete editing units:
+A section is a heading, the content below it, and any nested headings. It ends at the next heading of the same or a higher level, or at the end of the note, blockquote, or callout that contains it.
 
-- **Delete** a section, heading block, code block, callout, or blockquote.
-- **Move** a section earlier or later among its siblings.
-- **Promote or demote** a complete section hierarchy.
-- **Extract** a section into a note of its own.
-- **Repeat** the last successful movement or hierarchy change somewhere else.
+Sectionals uses the most specific section at the cursor. If the cursor is inside a nested section, it acts on that smaller section instead of the larger section around it. If text is selected, Sectionals uses the end where you last moved the cursor.
 
-Open the command palette and search for **Sectionals** to see the available actions. Commands have no default hotkeys, but you can assign your own under **Settings → Hotkeys**.
+A parent is the section that contains the current section. A child is a section nested directly inside it. Siblings are sections at the same level under the same parent.
 
-A section includes its heading, body, and nested subsections. A heading block includes only the heading and its body, leaving nested subsections in place.
+A heading block is narrower than a section. It includes the heading and its own content, but not nested headings.
+
+Open the command palette and search for **Sectionals**. Some commands appear only when they can run at the cursor. Commands have no default hotkeys. You can assign your own under **Settings → Hotkeys**.
 
 ## Commands
 
 ### Delete
 
+A fenced code block starts with a line of three or more backticks or tildes and continues through its closing fence, or through the rest of its surrounding note or quote when no closing fence exists. Callouts use Obsidian's `> [!type]` syntax. Plain blockquotes are quoted passages that are not callouts.
+
 | Command                              | Result                                                   |
 | ------------------------------------ | -------------------------------------------------------- |
-| **Delete current section**           | Removes a section and everything nested beneath it.      |
-| **Delete current heading block**     | Removes one heading block but keeps its subsections.     |
-| **Delete current fenced code block** | Removes the complete fenced code block.                  |
-| **Delete current callout**           | Removes the complete callout.                            |
-| **Delete current blockquote**        | Removes the complete plain blockquote.                   |
-| **Delete current structure…**        | Lets you choose when several removable structures apply. |
-
-Every deletion is one undoable edit.
+| **Delete current section**           | Removes the section and everything nested beneath it.    |
+| **Delete current heading block**     | Removes the heading block but keeps its nested sections. |
+| **Delete current fenced code block** | Removes the fenced code block around the cursor.         |
+| **Delete current callout**           | Removes the callout around the cursor.                   |
+| **Delete current blockquote**        | Removes the plain blockquote around the cursor.          |
+| **Delete current structure…**        | Shows the removable structures at the cursor to choose.  |
 
 ### Clipboard
 
-| Command                  | Result                                                         |
-| ------------------------ | -------------------------------------------------------------- |
-| **Copy current section** | Copies the complete section exactly as written.                |
-| **Cut current section**  | Copies the complete section, then removes it in one undo step. |
+| Command                  | Result                                             |
+| ------------------------ | -------------------------------------------------- |
+| **Copy current section** | Copies the section exactly as written.             |
+| **Cut current section**  | Copies the section, then removes it from the note. |
 
-Quoted and callout sections use the same scope as **Delete current section**. If the note changes while clipboard access is pending, Cut cancels the deletion. Neither Copy nor Cut changes the action remembered by **Repeat last structural action**.
+Quoted and callout sections use the same boundaries as **Delete current section**.
 
 ### Move
 
-| Command                           | Result                                                       |
-| --------------------------------- | ------------------------------------------------------------ |
-| **Move current section up**       | Moves the section one place earlier.                         |
-| **Move current section down**     | Moves the section one place later.                           |
-| **Move current section to start** | Moves the section to the start of its sibling group.         |
-| **Move current section to end**   | Moves the section to the end of its sibling group.           |
-| **Repeat last structural action** | Runs the last successful movement or hierarchy change again. |
+| Command                           | Result                                               |
+| --------------------------------- | ---------------------------------------------------- |
+| **Move current section up**       | Moves the section one sibling earlier.               |
+| **Move current section down**     | Moves the section one sibling later.                 |
+| **Move current section to start** | Moves the section to the start of its sibling group. |
+| **Move current section to end**   | Moves the section to the end of its sibling group.   |
 
-Movement carries the complete section, including its nested subsections. The cursor follows the moved text.
+Movement carries the current section and every section nested inside it. It stays within the same parent and keeps the cursor with the moved text.
 
 ### Navigate
 
@@ -71,35 +66,43 @@ Movement carries the complete section, including its nested subsections. The cur
 | **Go to next sibling section**     | Moves the cursor to the next sibling's heading.     |
 | **Go to first child section**      | Moves the cursor to the first child's heading.      |
 
-Navigation starts from the deepest section at the head of the active selection. It collapses the selection and does not cross between the note body, blockquotes, or callouts. The cursor lands at the start of the destination heading's title, or after its opening markers when the heading is untitled, and the editor centers that destination in view. Navigation does not change note content or add anything to Undo, and it does not replace the action remembered by **Repeat last structural action**.
+Navigation stays within the note body, blockquote, or callout that contains the current section. It places the cursor at the start of the heading text and centers that heading in the editor. If the heading has no title, the cursor lands after its `#` marks.
 
 ### Hierarchy
 
-| Command                     | Result                                                     |
-| --------------------------- | ---------------------------------------------------------- |
-| **Promote current section** | Promotes the section and its nested subsections one level. |
-| **Demote current section**  | Demotes the section and its nested subsections one level.  |
+| Command                     | Result                                                   |
+| --------------------------- | -------------------------------------------------------- |
+| **Promote current section** | Raises the section and all nested headings by one level. |
+| **Demote current section**  | Lowers the section and all nested headings by one level. |
 
-Promotion and demotion shift the complete section, including every nested subsection. Actions are unavailable at invalid boundaries, including promoting an H1, demoting a subtree containing an H6, or demoting without a preceding sibling.
+Promotion is unavailable for a level-one heading. Demotion is unavailable without a preceding sibling, or when the section contains a level-six heading.
 
-**Repeat last structural action** remembers the last successful movement or hierarchy change and can replay it across notes for the rest of the current Obsidian session.
+### Repeat
+
+| Command                           | Result                                                    |
+| --------------------------------- | --------------------------------------------------------- |
+| **Repeat last structural action** | Repeats the last successful movement or hierarchy change. |
+
+The remembered action lasts for the current Obsidian session and works across notes. Delete, clipboard, navigation, and extraction actions do not replace it.
 
 ### Extract
 
-| Command                                    | Result                                                          |
-| ------------------------------------------ | --------------------------------------------------------------- |
-| **Extract current section to linked note** | Moves the section into a new note and leaves a wikilink behind. |
-| **Extract current section to new note**    | Moves the section into a new note and opens it in the same tab. |
+| Command                                    | Result                                                           |
+| ------------------------------------------ | ---------------------------------------------------------------- |
+| **Extract current section to linked note** | Replaces the source section with a link to a new note.           |
+| **Extract current section to new note**    | Removes the source section and opens a new note in the same tab. |
 
-New notes go to Obsidian's configured new-note location. Each one starts with the original section heading as its level-one heading. If the name is already taken, Sectionals adds a number such as `Name 1`.
+Extraction uses the most specific non-empty section in the note body. It is unavailable inside blockquotes or callouts. It does not use a larger parent when the section at the cursor is empty.
 
-## Extraction notes
+The new note goes to Obsidian's configured new-note location and starts with the section title as a level-one heading. Inline Markdown in the title is kept, and nested headings shift together to preserve their relative levels. If the filename exists, Sectionals tries numbered names such as `Name 1`.
 
-Sectionals extracts the deepest eligible section. It does not substitute a larger parent section when the intended section is empty or unavailable.
+A linked extraction creates the shortest link that points only to the new note. When that link text or the new filename differs from the section title, the link still displays the original title.
 
-Relative Markdown links and embeds continue pointing to the same files after extraction. Sectionals leaves the source note unchanged if it cannot safely resolve a link, reference, or footnote shared with text outside the section.
+Sectionals updates relative links and embeds, such as `../Images/photo.png`, so they still point to the same files. It cancels extraction before changing the original note if it cannot resolve one of those paths, or if a reference-style link or footnote depends on text outside the section. Existing links elsewhere in the vault are not updated.
 
-Links elsewhere in the vault to headings or block IDs inside the extracted section are not updated. Extraction also does not replace the movement or hierarchy change remembered by **Repeat last structural action**.
+## Safety and undo
 
-> [!warning] Undo after extraction
-> Undo puts the section back in the source note, but it does not delete the note Sectionals created. If the new note cannot be opened, the source section stays removed and Sectionals tells you where it created the note. When extraction is cancelled after creating a note, Sectionals retains that note and reports its path rather than risking deletion of changed content.
+- Each deletion takes one Undo. Cut copies first, then deletes in one Undo. If the note changes before copying finishes, Sectionals does not delete it.
+- Navigation changes no content, adds nothing to Undo, and leaves the remembered repeat action unchanged.
+- Undo restores an extracted section in the original note but does not delete the new note.
+- If Sectionals creates a note but cannot finish, it keeps that note and shows its location. If the new note cannot be opened, the original section remains removed and Sectionals shows where the note was created.
